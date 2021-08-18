@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Home on rm -rf /</title>
+    <link>/</link>
+    <description>Recent content in Home on rm -rf /</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Fri, 16 Apr 2021 08:59:40 +0000</lastBuildDate><atom:link href="/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>AppArmor Gotcha</title>
+      <link>/posts/apparmor-bypass/</link>
+      <pubDate>Fri, 16 Apr 2021 08:59:40 +0000</pubDate>
+      
+      <guid>/posts/apparmor-bypass/</guid>
+      <description>I use Ubuntu. Mileage may vary on other distributions
+ Protecting Secrets in Home With AppArmor Plenty of applications stash secrets in sub-directories of home. You may not even notice as the directories are sometimes hidden e.g ~/.aws may contain API keys for AWS. Firefox, for example, has no real need to access API keys for cloud services so I have added the following to /etc/apparmor.d/local/usr.bin.firefox:
+# Site-specific additions and overrides for usr.</description>
+    </item>
+    
+    <item>
+      <title>Ghidra High-DPI on Ubuntu</title>
+      <link>/posts/ghidra-dpi/</link>
+      <pubDate>Sat, 27 Feb 2021 23:47:04 +0000</pubDate>
+      
+      <guid>/posts/ghidra-dpi/</guid>
+      <description>Problem The fonts are scaled so as to be unreadable (for me).
+Solution Find the file support/launch.properties where you installed Ghidra and edit the line
+VMARGS_LINUX=-Dsun.java2d.uiScale=1 to
+VMARGS_LINUX=-Dsun.java2d.uiScale=2 </description>
+    </item>
+    
+    <item>
+      <title>Gofuzz Part 2: Strings</title>
+      <link>/posts/go-fuzz-part-2/</link>
+      <pubDate>Fri, 12 Feb 2021 13:21:22 +0000</pubDate>
+      
+      <guid>/posts/go-fuzz-part-2/</guid>
+      <description>In this post, I&amp;rsquo;ll continue going into far too much detail about how NewFromGoFuzz in gofuzz doesn&amp;rsquo;t play nicely with go-fuzz (note the hyphen).
+Strings  It&amp;rsquo;s important to state right up front that a string holds arbitrary bytes. It is not required to hold Unicode text, UTF-8 text, or any other predefined format. As far as the content of a string is concerned, it is exactly equivalent to a slice of bytes.</description>
+    </item>
+    
+    <item>
+      <title>Gofuzz (Without the Hyphen)</title>
+      <link>/posts/go-fuzz-without-the-hyphen/</link>
+      <pubDate>Thu, 11 Feb 2021 16:55:20 +0000</pubDate>
+      
+      <guid>/posts/go-fuzz-without-the-hyphen/</guid>
+      <description>Hyphens There are two different go fuzzing &amp;ldquo;things&amp;rdquo;: go-fuzz and gofuzz. Both are authored by Google employees. The naming is unfortunate but once you know the difference it clears up a lot of confusion.
+gofuzz (note the lack of hyphen) creates Go objects from random sources. go-fuzz does coverage guided mutation fuzzing with some extra tricks. gofuzz provides functionality to use go-fuzz as its source of &amp;ldquo;randomness&amp;rdquo; (are you keeping up with the hyphens?</description>
+    </item>
+    
+    <item>
+      <title>Luarocks MITM</title>
+      <link>/posts/luarocks/</link>
+      <pubDate>Thu, 11 Feb 2021 13:32:36 +0000</pubDate>
+      
+      <guid>/posts/luarocks/</guid>
+      <description>Background LuaRocks is a package manager for Lua. The executable &amp;ldquo;luarocks&amp;rdquo; allows users to
+ download Lua packages and dependencies from luarocks.org (the default) upload packages to luarocks.org  Several months ago I found a man-in-the-middle vulnerability and reported it to the LuaRocks project via Gitter. I was directed to create a public issue on github. At the time of writing, there&amp;rsquo;s no CVE assigned by the project or github security notification.</description>
+    </item>
+    
+    <item>
+      <title>Go-Fuzz</title>
+      <link>/posts/fuzz/</link>
+      <pubDate>Sun, 10 Jan 2021 20:55:53 +0000</pubDate>
+      
+      <guid>/posts/fuzz/</guid>
+      <description>I&amp;rsquo;ve found plenty of &amp;ldquo;crashers&amp;rdquo; using go-fuzz. If you browse the trophy cabinet, you&amp;rsquo;ll notice that I added a few. With Golang being a memory-safe language, the impact of these bugs is reduced to denial of service vectors. I&amp;rsquo;d like to point out here that fuzzing can be used for so much more than shaking out off-by-one errors: if we know invariants or properties that our function outputs must satisfy, then we can build fuzz tests to check for violations.</description>
+    </item>
+    
+    <item>
+      <title>Golang Testing</title>
+      <link>/posts/golang-testing/</link>
+      <pubDate>Wed, 06 Jan 2021 14:03:52 +0000</pubDate>
+      
+      <guid>/posts/golang-testing/</guid>
+      <description>My (very opinionated) checklist/cheatsheet for Golang testing. Nothing particularly original here.
+Tactics Tactic: Testable Example Start with a testable example, if you can. This is invaluable documentation and will tell you if the code has a usable interface, has too-many moving parts etc.
+Tactic: Table-Driven Tests Dave Chaney makes the case for table-driven tests.
+Tactic: Network Testing Avoid hard coding listener port numbers. Overcome the problems of port and address allocations by letting the operating system choose the port.</description>
+    </item>
+    
+    <item>
+      <title>Weekend Projects</title>
+      <link>/posts/weekend-projects/</link>
+      <pubDate>Tue, 05 Jan 2021 23:27:23 +0000</pubDate>
+      
+      <guid>/posts/weekend-projects/</guid>
+      <description>Brain dump of potential weekend/lockdown projects.
+Threat Modelling Tool When I make a threat model, I draw ascii art, do doodles, write descriptions but it&amp;rsquo;d be nicer to have some tools which allowed me to
+ specify a threat model in a near natural language generate diagrams from the threat models  Threat Modelling Language The language would be as close to English as possible. Simple sentences along the lines of</description>
+    </item>
+    
+    <item>
+      <title>TIS-100</title>
+      <link>/posts/tis-100/</link>
+      <pubDate>Mon, 04 Jan 2021 19:28:33 +0000</pubDate>
+      
+      <guid>/posts/tis-100/</guid>
+      <description>TIS-100 is nerd-heaven. Competing against friends on Steam had me fall into a vortex for a few days over Christmas. So far, I&amp;rsquo;ve avoided spoilers and solutions on the internets and don&amp;rsquo;t want to add any. The fun really is in finding your own solutions.
+I&amp;rsquo;ve thought up a couple of TIS-100 hobby projects to try when I have the time and inspiration. Maybe someone has done it already but that&amp;rsquo;s not really the point.</description>
+    </item>
+    
+    <item>
+      <title>Startups: Codian</title>
+      <link>/posts/codian1/</link>
+      <pubDate>Sun, 03 Jan 2021 20:13:07 +0000</pubDate>
+      
+      <guid>/posts/codian1/</guid>
+      <description>Introduction I&amp;rsquo;ve spent most of my career in startups which would go on to be acquired by Cisco (twice). As a cheap form of therapy, I&amp;rsquo;m collecting some of my &amp;ldquo;learnings&amp;rdquo; here.
+Ancient History I joined Codian in the summer of 2006. I was nearing completion of my PhD, had a one-year old child and far too much student debt. I&amp;rsquo;d decided that I didn&amp;rsquo;t want to follow an academic career.</description>
+    </item>
+    
+    <item>
+      <title>Golang Types and Secrets: Part 2</title>
+      <link>/posts/types2/</link>
+      <pubDate>Sat, 02 Jan 2021 19:37:42 +0000</pubDate>
+      
+      <guid>/posts/types2/</guid>
+      <description>The previous post, described how a simple toy authentication system could be improved by using a type definition to redact secrets when they are passed to fmt.Printf, logging functions etc. In this post, hiding the complexity of defending against timing attacks is outlined.
+Let&amp;rsquo;s frame the discussion with a simple scenario: you run an online store with user accounts, you store usernames and you want to avoid user enumeration. You may not have user enumeration in your threat-model but if you care about GDPR, you should probably add it.</description>
+    </item>
+    
+    <item>
+      <title>Golang Types and Secrets: Part 1</title>
+      <link>/posts/types/</link>
+      <pubDate>Fri, 01 Jan 2021 19:36:58 +0000</pubDate>
+      
+      <guid>/posts/types/</guid>
+      <description>A Toy Authentication System Suspend disbelief and consider the following toy authentication system:
+package main import ( &amp;#34;fmt&amp;#34; ) func allowAccess(secret string) bool { return secret == &amp;#34;foo&amp;#34; } func main() { secret := &amp;#34;foo&amp;#34; fmt.Printf(&amp;#34;Access: %v, Secret: %s&amp;#34;, allowAccess(secret), secret) } Try this at the Golang playground.
+What&amp;rsquo;s wrong with this code? In my work auditing Golang codebases, I often see secrets being passed around as strings or byte slices.</description>
+    </item>
+    
+    <item>
+      <title>Reporting Vulnerabilities To Snyk</title>
+      <link>/posts/snyk/</link>
+      <pubDate>Sat, 19 Sep 2020 22:18:02 +0000</pubDate>
+      
+      <guid>/posts/snyk/</guid>
+      <description>Snyk is a CNA for Golang packages (and other popular languages). When I learned that they&amp;rsquo;d accept vulnerability reports, I decided to try them out with a couple of old bugs which I&amp;rsquo;d reported but got no response from the project author.
+The turnaround on these issues was very quick (a couple of hours, on a weekend no less) and there are now two CVEs assigned: CVE-2020-7711 and CVE-2020-7731.</description>
+    </item>
+    
+    <item>
+      <title>Four of a Kind</title>
+      <link>/posts/four-of-a-kind/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/posts/four-of-a-kind/</guid>
+      <description>I stumbled across a blog from a really interesting pioneer of computing, David S Maynard. This post about a probability puzzle nerd-sniped me. The problem statement is:
+Imagine we have a deck of 52 standard playing cards. First question: How many cards do we have to draw until we can be sure that we have four of a kind? In other words: What is the minimum number of cards we must draw until we can be certain that four of those cards are the same kind?</description>
+    </item>
+    
+    <item>
+      <title>CV</title>
+      <link>/about/</link>
+      <pubDate>Wed, 29 Jan 2020 10:40:48 +0000</pubDate>
+      
+      <guid>/about/</guid>
+      <description>See my LinkedIn profile for chronological details.
+I am/have been
+ a mathematician a Codian, Tandberg, Cisco, Acano and Jazz Networks alum an automation engineer, embedded systems engineer, security specialist, CSO.  Apart from brief periods after acquisition, my entire professional life has been in startups. I&amp;rsquo;ve done a wide variety of things to build these companies:
+ automated production line tests wrote processor bootstrap code for embedded systems ported operating systems rolled custom linux distributions wrote kernel drivers tinkered with FPGAs optimised network stacks created and ran build systems tracked down silicon bugs hunted security flaws built auth systems ran PSIRTs implemented ISO 27001 navigated the US Federal government certification processes (JITC etc)  I know how to program in</description>
+    </item>
+    
+    <item>
+      <title>Golang: Panicking Safely</title>
+      <link>/posts/panic/</link>
+      <pubDate>Tue, 28 Jan 2020 19:16:22 +0000</pubDate>
+      
+      <guid>/posts/panic/</guid>
+      <description>Golang code can panic, causing availability issues, maybe even a denial of service vector. Compared to C and C++, it&amp;rsquo;s pretty innocuous. Still, denial of service is a serious issue: why not just use recover in all goroutines and keep the show on the road?
+An Example Consider the following code:
+// buggy reads data from input 16 bytes at a time, munges it and then writes it to output func buggy(input, output string) error { in, err := os.</description>
+    </item>
+    
+    <item>
+      <title>xchg rax,rax</title>
+      <link>/posts/xchg-rax-rax/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/posts/xchg-rax-rax/</guid>
+      <description>x86-64 Kata The book xchg rax,rax (content available free here) is a collection of 0x40 x86-64 snippets. It has no text other than chunks of assembly language. You read the code and ponder its meaning. Kata for the budding reverse engineer.
+Spoiler Alert Program 0x03 is pretty neat:
+sub rdx,rax sbb rcx,rcx and rcx,rdx add rax,rcx Let me spoil this for you: at the end of this program, rax will contain the smaller of the original rax and rdx values.</description>
+    </item>
+    
+    <item>
+      <title>SO_REUASEADDR and Golang</title>
+      <link>/posts/so_reuaseaddr-golang/</link>
+      <pubDate>Fri, 13 Oct 2017 13:53:00 +0100</pubDate>
+      
+      <guid>/posts/so_reuaseaddr-golang/</guid>
+      <description>A Flaky Test I was investigating a test which failed with a very low probability. It boiled down to this:
+package main import ( &amp;#34;net&amp;#34; &amp;#34;time&amp;#34; ) func main() { //port zero means let the OS choose a free port 	l, err := net.Listen(&amp;#34;tcp&amp;#34;, &amp;#34;127.0.0.1:0&amp;#34;) if err != nil { panic(err) } addr := l.Addr().String() go func() { for { c, err := l.Accept() if err != nil { return } c.</description>
+    </item>
+    
+    <item>
+      <title>Leaking File Descriptors in Go</title>
+      <link>/posts/file-descriptor-go/</link>
+      <pubDate>Fri, 13 Oct 2017 11:39:00 +0100</pubDate>
+      
+      <guid>/posts/file-descriptor-go/</guid>
+      <description>Golang, File Descriptors and Finalizers If you Open() a file in Golang and it goes out of scope, then it&amp;rsquo;ll be closed the next time the garbage collector runs as there&amp;rsquo;s a cleanup finalizer set when Open() is called.
+You can see this in action in the following program:
+package main import ( &amp;#34;fmt&amp;#34; &amp;#34;os&amp;#34; &amp;#34;runtime&amp;#34; ) func allocate() int { //use this file as our test subject 	_, sourceFile, _, ok := runtime.</description>
+    </item>
+    
+    <item>
+      <title>CVE-2017-15042</title>
+      <link>/posts/cve-2017-15042/</link>
+      <pubDate>Sat, 07 Oct 2017 14:46:09 +0100</pubDate>
+      
+      <guid>/posts/cve-2017-15042/</guid>
+      <description>I Went Looking For A STARTTLS Bug I&amp;rsquo;ve been putting together a cryptography course for my colleagues which focuses on mistakes. Its working title is Cryptography Done Wrong which should give you an idea of the tone. There&amp;rsquo;s a wealth of examples of systems assembled from sound cryptographic components which end up with security issues (for some definition of secure).
+Over the years, TLS has been an excellent source of examples for such a course.</description>
+    </item>
+    
+    <item>
+      <title>All Posts</title>
+      <link>/single/</link>
+      <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+      
+      <guid>/single/</guid>
+      <description>2021-16-04 AppArmor Gotcha   I use Ubuntu. Mileage may vary on other distributions
+ Protecting Secrets in Home With AppArmor Plenty of applications stash secrets in sub-directories of home. You may not even notice as the directories are sometimes hidden e.g ~/.aws may contain API keys for AWS. Firefox, for example, has no real need to access API keys for cloud services so I have added the following to /etc/apparmor.</description>
+    </item>
+    
+  </channel>
+</rss>

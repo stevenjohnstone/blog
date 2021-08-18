@@ -1,0 +1,3 @@
+[submodule "themes/hugo-xmin-mod"]
+	path = themes/hugo-xmin-mod
+	url = https://github.com/stevenjohnstone/hugo-xmin

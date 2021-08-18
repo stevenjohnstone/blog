@@ -1,0 +1,1815 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Weaponised Autism">
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="All Posts" />
+    <meta property="og:url" content="/single/" />
+    
+   <link rel="shortcut icon" href="/images/favicon.ico" type="image/x-icon">
+<link rel="icon" href="/images/favicon.ico" type="image/x-icon">
+
+    <title>All Posts | rm -rf /</title>
+   
+
+<link rel="stylesheet" type="text/css" href="/css/style.css">
+<link rel="stylesheet" type="text/css" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/syntax/syntax.css" />
+
+    
+  </head>
+
+  <body>
+    <a class="skip-link" href="#maincontent">Skip to main</a>
+    <nav>
+    <ul class="menu">
+      
+      <li><a href="/">Home</a></li>
+      
+      <li><a href="/about">About</a></li>
+      
+      <li><a href="/categories/">Categories</a></li>
+      
+      <li><a href="/tags/">Tags</a></li>
+      
+      <li><a href="/index.xml">Subscribe</a></li>
+      
+    </ul>
+    <hr/>
+    </nav>
+
+<div class="article-meta">
+<h1><span class="title">All Posts</span></h1>
+
+
+</div>
+
+<main id="maincontent">
+
+    <h2>2021-16-04
+    AppArmor Gotcha
+    </h2>
+    <blockquote>
+<p>I use Ubuntu. Mileage may vary on other distributions</p>
+</blockquote>
+<h2 id="protecting-secrets-in-home-with-apparmor">Protecting Secrets in Home With AppArmor</h2>
+<p>Plenty of applications stash secrets in sub-directories of home. You may
+not even notice as the directories are sometimes hidden e.g ~/.aws may contain
+API keys for AWS. Firefox, for example, has
+no real need to access API keys for cloud services
+so I have added the following to /etc/apparmor.d/local/usr.bin.firefox:</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell"><span class="c1"># Site-specific additions and overrides for usr.bin.firefox.</span>
+<span class="c1"># For more details, please see /etc/apparmor.d/local/README.</span>
+
+<span class="c1"># covers google and firebase credentials</span>
+deny @<span class="o">{</span>HOME<span class="o">}</span>/.config/ rwmkl,
+deny @<span class="o">{</span>HOME<span class="o">}</span>/.config/** rwmkl,
+<span class="c1"># aws has its own directory</span>
+deny @<span class="o">{</span>HOME<span class="o">}</span>/.aws/ rwmkl,
+deny @<span class="o">{</span>HOME<span class="o">}</span>/.aws/** rwmkl,
+</code></pre></div><p>When I use Firefox to browse files in my home dir, permission to access ~/.aws is denied because AppArmor prevents access as intended:</p>
+<p><img src="/images/apparmorbypass/denied.png#center" alt="firefox permission denied"></p>
+<p>The idea is to limit the impact of Firefox
+being compromised.</p>
+<h2 id="paths-and-namespaces">Paths and Namespaces</h2>
+<p>I use <a href="https://docs.docker.com/engine/security/rootless/">rootless docker</a> which requires <a href="https://man7.org/linux/man-pages/man7/user_namespaces.7.html">user
+namespace</a> functionality to operate without
+root. It&rsquo;s a huge improvement over the usual
+insecure workflow with docker where any program running as an unprivileged user
+can start up a container running as root with access to all system resources. As an extra layer of security, I was interested in writing an apparmor profile for docker
+and the containers it launches which would
+protect secrets in my home directory.</p>
+<p>To test the profile, I made of copy of bash called &ldquo;bosh&rdquo; and wrote a basic profile which would
+resemble what I had in mind for docker:</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell"><span class="c1">#include &lt;tunables/global&gt;</span>
+profile bosh /home/vagrant/bosh <span class="o">{</span>
+  <span class="c1"># Allow all rules</span>
+  capability,
+  mount,
+  file,
+  unix,
+  ptrace,
+  /dev/pts/* rw,
+  <span class="c1"># aws has its own directory</span>
+  audit deny @<span class="o">{</span>HOME<span class="o">}</span>/.aws/<span class="o">{</span>,**<span class="o">}</span> mrkwl,
+<span class="o">}</span>
+</code></pre></div><p>Docker needs to be able to do bind mounts and this causes us
+problems: the directory ~/.aws can be bind mounted to, say, ~/target/. The contents of ~/.aws will be available at ~/target and, crucially, will be considered by AppArmor to not match
+the deny rule</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">audit deny @<span class="o">{</span>HOME<span class="o">}</span>/.aws/<span class="o">{</span>,**<span class="o">}</span> mrkwl,
+</code></pre></div><p>Here&rsquo;s an example of (ab)using user namespaces to access secrets
+in ~/.aws:</p>
+<p><img src="/images/apparmorbypass/mount.gif#center" alt="user namespace bypass"></p>
+<p>Here, a user namespace is created
+from our &ldquo;bosh&rdquo; shell. ~/.aws is bind mounted
+to ~/target and the file &ldquo;foo&rdquo; is copied. So,
+if docker (or anything which can run docker) is compromised, then the AppArmor profile
+isn&rsquo;t enough to protect files in ~/.aws.</p>
+<h2 id="docker-impacts-apparmor-rules">Docker Impacts AppArmor Rules</h2>
+<p>If you have non-rootless docker installed and your user has access to the docker socket,
+the user has root access. For example, by running</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">docker run -it -v /:/root alpine /bin/sh
+</code></pre></div><p>you drop into a shell as root with the host computer&rsquo;s root-filesystem available at /root.
+You can now do whatever you like to the system: steal files, reset passwords,
+create backdoor accounts, modify local logs to hide the intrusion etc.</p>
+<p>With rootless-docker, the user in the container shell isn&rsquo;t root but the normal user account, even if &ldquo;whoami&rdquo; claims otherwise:</p>
+<pre><code>/ # whoami
+root
+/ # cat /root/etc/shadow
+cat: can't open '/root/etc/shadow': Permission denied
+/ # 
+</code></pre><p>The user is called &ldquo;root&rdquo; inside the container but is mapped to our normal, unprivileged user account and so /root/etc/shadow is off limits.</p>
+<p>Although rootless-docker is an improvement from a security point of view, AppArmor profile
+writers should be aware that access to the docker socket (/run/user/1000/docker.sock on my
+system) allows file access rules to be bypassed. In the running example of protecting ~/.aws,
+running the following (or driving the docker API in an equivalent way)</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">docker run --rm -v <span class="s2">&#34;</span><span class="nv">$HOME</span><span class="s2">&#34;</span>:/homecopy alpine /bin/sh -c <span class="s2">&#34;cp -R /homecopy/.aws /homecopy/awscopy&#34;</span>
+</code></pre></div><p>copies the directory ~/.aws to ~/awscopy and the secrets therein are no longer protected by
+the AppArmor profile.</p>
+<blockquote>
+<p>AppArmor profile writers should restrict access the docker socket unless it is required. If it is required, it should be noted that pathname based restrictions can be bypassed.</p>
+</blockquote>
+<h2 id="is-this-a-bug">Is This A Bug?</h2>
+<p>I think it&rsquo;s at least a very sharp-edge you could cut yourself on when writing AppArmor profiles
+when user namespaces and bind mounts are in the mix.</p>
+<p>Maybe the whole concept of controlling access by the filename is flawed? Maybe SELinux labels are
+more appropriate for modern container setups?</p>
+
+
+    <h2>2021-27-02
+    Ghidra High-DPI on Ubuntu
+    </h2>
+    <h2 id="problem">Problem</h2>
+<p><img src="/images/highdpi/scale1-small.jpg#center" alt="small fonts"></p>
+<p>The fonts are scaled so as to be unreadable (for me).</p>
+<h2 id="solution">Solution</h2>
+<p>Find the file support/launch.properties where you installed Ghidra and edit the line</p>
+<pre><code>VMARGS_LINUX=-Dsun.java2d.uiScale=1
+</code></pre><p>to</p>
+<pre><code>VMARGS_LINUX=-Dsun.java2d.uiScale=2
+</code></pre><p><img src="/images/highdpi/scale2-small.jpg#center" alt="larger fonts"></p>
+
+
+    <h2>2021-12-02
+    Gofuzz Part 2: Strings
+    </h2>
+    <p>In this post, I&rsquo;ll <a href="/posts/go-fuzz-without-the-hyphen">continue</a> going into far too much detail about how <em><a href="https://pkg.go.dev/github.com/google/gofuzz#NewFromGoFuzz">NewFromGoFuzz</a></em> in <a href="https://github.com/google/gofuzz">gofuzz</a>
+doesn&rsquo;t play nicely with <a href="https://github.com/dvyukov/go-fuzz">go-fuzz</a> (note the hyphen).</p>
+<h2 id="strings">Strings</h2>
+<blockquote>
+<p>It&rsquo;s important to state right up front that a string holds arbitrary bytes. It is not required to hold Unicode text, UTF-8 text, or any other predefined format. As far as the content of a string is concerned, it is exactly equivalent to a slice of bytes.
+<a href="https://blog.golang.org/strings">https://blog.golang.org/strings</a></p>
+</blockquote>
+<p>When fuzzing a function which accepts strings (or objects containing strings),
+it&rsquo;s a good idea to try strings which are not well-formed UTF-8.</p>
+<p>Strings generated by gofuzz are restricted to well-formed UTF-8 with zero to 19 (inclusive) runes.</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// randString of UnicodeRange makes a random string up to 20 characters long.
+</span><span class="c1">// Each character is selected form ur(UnicodeRange).
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">ur</span> <span class="nx">UnicodeRange</span><span class="p">)</span> <span class="nf">randString</span><span class="p">(</span><span class="nx">r</span> <span class="o">*</span><span class="nx">rand</span><span class="p">.</span><span class="nx">Rand</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+    <span class="nx">n</span> <span class="o">:=</span> <span class="nx">r</span><span class="p">.</span><span class="nf">Intn</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
+    <span class="nx">sb</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span><span class="p">{}</span>
+    <span class="nx">sb</span><span class="p">.</span><span class="nf">Grow</span><span class="p">(</span><span class="nx">n</span><span class="p">)</span>
+    <span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="nx">n</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+        <span class="nx">sb</span><span class="p">.</span><span class="nf">WriteRune</span><span class="p">(</span><span class="nx">ur</span><span class="p">.</span><span class="nf">choose</span><span class="p">(</span><span class="nx">r</span><span class="p">))</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="nx">sb</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><p><a href="https://github.com/google/gofuzz/blob/2083bd8c37e7e627ec31e1eea8adcd9ff456fc81/fuzz.go#L550">reference</a></p>
+<p>Reading the <em>randString</em> function, we see that there will be the
+following reads from the data provided by go-fuzz:</p>
+<ul>
+<li>r.Intn(20) requires at least eight bytes</li>
+<li>ur.choose(r) calls r.Int63n(), which requires eight bytes</li>
+</ul>
+<p>In total, at least 8*(n + 1) bytes will be used of the data from go-fuzz
+to construct a string. None of the data will survive as
+recognisable fragments.
+For example,</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+    <span class="s">&#34;fmt&#34;</span>
+
+    <span class="nx">fuzz</span> <span class="s">&#34;github.com/google/gofuzz&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="nx">data</span> <span class="o">:=</span> <span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&#34;-----BEGIN RSA PRIVATE KEY-----&#34;</span><span class="p">)</span>
+    <span class="kd">var</span> <span class="nx">str</span> <span class="kt">string</span>
+    <span class="nx">fuzz</span><span class="p">.</span><span class="nf">NewFromGoFuzz</span><span class="p">(</span><span class="nx">data</span><span class="p">).</span><span class="nf">Fuzz</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">str</span><span class="p">)</span>
+    <span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;str = %s\n&#34;</span><span class="p">,</span> <span class="nx">str</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>outputs</p>
+<pre><code>str = Ȱ#ǻŐ蒉
+</code></pre><p>This renders go-fuzz&rsquo;s sonar, literal and versifier functionality
+ineffective. When fuzzing a function with go-fuzz, string comparisons are reported back to go-fuzz by
+the sonar. Either side of the comparison can be used as a starting
+point for new mutational fuzzing. To be useful, the structure
+of the string needs to be preserved but gofuzz slices and dices
+the string to feed a random number generator, choose a string length and then choose offsets into an array of unicode characters.</p>
+<h2 id="experiment">Experiment</h2>
+<p>I maintain a <a href="https://github.com/stevenjohnstone/toughfuzzer">repository</a> which demonstrates how go-fuzz can navigate
+&ldquo;obstacles&rdquo; in code. Here&rsquo;s an example fuzzer demonstrating how
+the sonar can detect string comparisons so as to intelligently
+choose fuzzing inputs:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang">  
+<span class="kn">package</span> <span class="nx">sonar</span>
+
+<span class="kd">const</span> <span class="nx">leet</span> <span class="p">=</span> <span class="s">&#34;1337 string abcdefg&#34;</span>
+
+<span class="kd">func</span> <span class="nf">reverse</span><span class="p">(</span><span class="nx">s</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+    <span class="nx">r</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="kt">rune</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="nx">s</span><span class="p">))</span>
+    <span class="k">for</span> <span class="nx">i</span><span class="p">,</span> <span class="nx">c</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">s</span> <span class="p">{</span>
+        <span class="nx">r</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">-</span><span class="nx">i</span><span class="p">]</span> <span class="p">=</span> <span class="nx">c</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">r</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">findString</span><span class="p">(</span><span class="nx">s</span><span class="p">,</span> <span class="nx">t</span> <span class="kt">string</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="nx">s</span> <span class="o">==</span> <span class="nf">reverse</span><span class="p">(</span><span class="nx">t</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nb">panic</span><span class="p">(</span><span class="s">&#34;found string&#34;</span><span class="p">)</span>
+     <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// FuzzString challenges the fuzzer to find a simple string which is reversed
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">FuzzString</span><span class="p">(</span><span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="c1">// note that if we swap the arguments of findString,
+</span><span class="c1"></span>    <span class="c1">// sonar will not help us find a matching string
+</span><span class="c1"></span>    <span class="nf">findString</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">data</span><span class="p">),</span> <span class="nx">leet</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div><p>On my laptop, go-fuzz can discover the input &ldquo;gfedcba gnirts 7331&rdquo; in about 6 seconds. Let&rsquo;s see what happens if we build
+the string <em>NewFromGoFuzz</em>:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">sonar</span>
+
+<span class="kn">import</span> <span class="nx">fuzz</span> <span class="s">&#34;github.com/google/gofuzz&#34;</span>
+
+<span class="kd">const</span> <span class="nx">leet</span> <span class="p">=</span> <span class="s">&#34;1337 string abcdefg&#34;</span>
+
+<span class="kd">func</span> <span class="nf">reverse</span><span class="p">(</span><span class="nx">s</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+    <span class="nx">r</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="kt">rune</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="nx">s</span><span class="p">))</span>
+    <span class="k">for</span> <span class="nx">i</span><span class="p">,</span> <span class="nx">c</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">s</span> <span class="p">{</span>
+        <span class="nx">r</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">-</span><span class="nx">i</span><span class="p">]</span> <span class="p">=</span> <span class="nx">c</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">r</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">findString</span><span class="p">(</span><span class="nx">s</span><span class="p">,</span> <span class="nx">t</span> <span class="kt">string</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="nx">s</span> <span class="o">==</span> <span class="nf">reverse</span><span class="p">(</span><span class="nx">t</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nb">panic</span><span class="p">(</span><span class="s">&#34;found string&#34;</span><span class="p">)</span>
+     <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// FuzzString challenges the fuzzer to find a simple string which is reversed
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">FuzzString</span><span class="p">(</span><span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">str</span> <span class="kt">string</span>
+    <span class="c1">// note that if we swap the arguments of findString,
+</span><span class="c1"></span>    <span class="c1">// sonar will not help us find a matching string
+</span><span class="c1"></span>    <span class="nx">fuzz</span><span class="p">.</span><span class="nf">NewFromGoFuzz</span><span class="p">(</span><span class="nx">data</span><span class="p">).</span><span class="nf">Fuzz</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">str</span><span class="p">)</span>
+    <span class="nf">findString</span><span class="p">(</span><span class="nx">str</span><span class="p">,</span> <span class="nx">leet</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div><p>After an hour on my laptop, no crashers.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Gofuzz generates strings which are</p>
+<ul>
+<li>limited in length</li>
+<li>well-formed UTF-8</li>
+<li>do not resemble inputs</li>
+</ul>
+<p>It&rsquo;s probably not a good idea to use gofuzz to generate objects
+from go-fuzz inputs if those object have string elements.</p>
+<blockquote>
+<p>Note: I&rsquo;m not saying that gofuzz on its own doesn&rsquo;t work. I&rsquo;m saying that it&rsquo;s not suited to transforming data provided by a mutational fuzzer into objects</p>
+</blockquote>
+
+
+    <h2>2021-11-02
+    Gofuzz (Without the Hyphen)
+    </h2>
+    <h2 id="hyphens">Hyphens</h2>
+<p>There are two different go fuzzing &ldquo;things&rdquo;: <a href="https://github.com/dvyukov/go-fuzz">go-fuzz</a> and <a href="https://github.com/google/gofuzz">gofuzz</a>. Both are authored by Google employees. The naming is unfortunate but once you know the difference it
+clears up a lot of confusion.</p>
+<p>gofuzz (note the lack of hyphen) creates Go objects from random
+sources. go-fuzz does coverage guided mutation fuzzing with
+some <a href="https://github.com/stevenjohnstone/toughfuzzer">extra tricks</a>. gofuzz provides functionality to use go-fuzz
+as its source of &ldquo;randomness&rdquo; (are you keeping up with the hyphens?) e.g. from the gofuzz <a href="https://github.com/google/gofuzz/blob/master/README.md">README</a></p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">// +build gofuzz
+</span><span class="c1"></span><span class="kn">package</span> <span class="nx">mypackage</span>
+
+<span class="kn">import</span> <span class="nx">fuzz</span> <span class="s">&#34;github.com/google/gofuzz&#34;</span>
+
+<span class="kd">func</span> <span class="nf">Fuzz</span><span class="p">(</span><span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">i</span> <span class="kt">int</span>
+    <span class="nx">fuzz</span><span class="p">.</span><span class="nf">NewFromGoFuzz</span><span class="p">(</span><span class="nx">data</span><span class="p">).</span><span class="nf">Fuzz</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">i</span><span class="p">)</span>
+    <span class="nf">MyFunc</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div><p>In theory, this allows us to fuzz functions which take objects
+other than byte slices (or objects like strings which are
+trivially derived from byte slices) as arguments.</p>
+<p>The claim by the gofuzz project is that you can do &ldquo;easier go-fuzzing&rdquo; in this way. I don&rsquo;t dispute the easy part but is it effective? That&rsquo;s what this post and some follow ups will test.</p>
+<h2 id="why-though">Why Though?</h2>
+<p>Fuzzing functions which take objects as input is an important
+problem to solve. A good solution would, I believe, reduce the barrier to
+entry for fuzzing significantly. A good solution must work well
+with go-fuzz and not break its mutational guided fuzzing, sonar or versifier. That is, it shouldn&rsquo;t break the magic of go-fuzz.</p>
+<h2 id="does-the-readme-example-work">Does the README example work?</h2>
+<p>Let&rsquo;s fill out the example with  &ldquo;MyFunc&rdquo;:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// +build gofuzz
+</span><span class="c1"></span><span class="kn">package</span> <span class="nx">mypackage</span>
+
+<span class="kn">import</span> <span class="nx">fuzz</span> <span class="s">&#34;github.com/google/gofuzz&#34;</span>
+
+<span class="kd">func</span> <span class="nf">MyFunc</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="nx">i</span> <span class="o">==</span> <span class="mi">1337</span> <span class="p">{</span>
+        <span class="nb">panic</span><span class="p">(</span><span class="s">&#34;found correct i&#34;</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">Fuzz</span><span class="p">(</span><span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">i</span> <span class="kt">int</span>
+    <span class="nx">fuzz</span><span class="p">.</span><span class="nf">NewFromGoFuzz</span><span class="p">(</span><span class="nx">data</span><span class="p">).</span><span class="nf">Fuzz</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">i</span><span class="p">)</span>
+    <span class="nf">MyFunc</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span>
+    <span class="k">return</span> <span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div><p>Here, <em>MyFunc</em> will crash if the input is 1337. It&rsquo;s very artificial but represents a key feature of software: some paths
+are taken based on constants in the program and those paths
+may be buggy.</p>
+<p>What are the chances of finding this by feeding <em>MyFunc</em> with random <em>int</em> values? I&rsquo;d expect to have to try 2^63 values before finding the magic 1337. Luckily, go-fuzz isn&rsquo;t feeding
+just random values. It knows about program constants and it gets
+updated when comparisons are made by its <em>sonar</em>. So go-fuzz has
+knowledge of 1337 and will use it as input with various
+encodings:</p>
+<ul>
+<li>big-endian</li>
+<li>little-endian</li>
+<li>decimal encoded ASCII</li>
+<li>hex encoded ASCII</li>
+</ul>
+<p>That said, will go-fuzz be able to discover the path to a panic
+with <em>NewFromGoFuzz</em> doing its thing? I gave it a try, running it for about an hour seeing no crashes (so the value 1337 wasn&rsquo;t found). This doesn&rsquo;t sound like a long time until you consider that this fuzzer without NewFromGoFuzz in the way finds the value nearly instantly:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// +build gofuzz
+</span><span class="c1"></span>
+<span class="kn">package</span> <span class="nx">mypackage</span>
+
+<span class="kn">import</span> <span class="s">&#34;encoding/binary&#34;</span>
+
+<span class="kd">func</span> <span class="nf">MyFunc</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="nx">i</span> <span class="o">==</span> <span class="mi">1337</span> <span class="p">{</span>
+        <span class="nb">panic</span><span class="p">(</span><span class="s">&#34;found correct i&#34;</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">Fuzz</span><span class="p">(</span><span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="nx">i</span> <span class="o">:=</span> <span class="nx">binary</span><span class="p">.</span><span class="nx">BigEndian</span><span class="p">.</span><span class="nf">Uint64</span><span class="p">(</span><span class="nx">data</span><span class="p">)</span>
+    <span class="nf">MyFunc</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="nx">i</span><span class="p">))</span>
+    <span class="k">return</span> <span class="mi">0</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="what-goes-wrong">What Goes Wrong?</h2>
+<p>Let&rsquo;s breakdown how an <em>int</em> is constructed from go-fuzz (remember the hyphen) by gofuzz.</p>
+<p>In <em>NewFromGoFuzz</em>, <a href="https://github.com/google/gofuzz/blob/master/bytesource/bytesource.go#L43">eight bytes</a> are
+taken from <em>data</em> (with zeroes if <em>data</em> is too short).
+These eight bytes are used to seed a random number generator.
+The random number generator is used once the data provided by
+go-fuzz is used up.
+Any remaining bytes are used to construct the <em>int</em> but once
+those run out, the random number generator is used.</p>
+<p>As go-fuzz tries the various encodings of 1337, it&rsquo;s likely that
+the inputs it passes to <em>Fuzz</em> will be less then eight bytes and lost as
+inputs to a random number generator. Eventually, go-fuzz will
+move away from trying these encodings and their mutations.</p>
+<h2 id="can-we-fix-it-yes-we-can">Can We Fix It? Yes We Can</h2>
+<p>Kinda. There&rsquo;s going to me more broken stuff later.</p>
+<p>Applying this patch:</p>
+<div class="highlight"><pre class="chroma"><code class="language-diff" data-lang="diff"><span class="gh">diff --git a/bytesource/bytesource.go b/bytesource/bytesource.go
+</span><span class="gh">index 5bb3659..efd6a65 100644
+</span><span class="gh"></span><span class="gd">--- a/bytesource/bytesource.go
+</span><span class="gd"></span><span class="gi">+++ b/bytesource/bytesource.go
+</span><span class="gi"></span><span class="gu">@@ -40,7 +40,9 @@ func New(input []byte) *ByteSource {
+</span><span class="gu"></span>                fallback: rand.NewSource(0),
+        }
+        if len(input) &gt; 0 {
+<span class="gd">-               s.fallback = rand.NewSource(int64(s.consumeUint64()))
+</span><span class="gd"></span><span class="gi">+               seed := make([]byte, 8)
+</span><span class="gi">+               copy(seed, input)
+</span><span class="gi">+               s.fallback = rand.NewSource(int64(binary.BigEndian.Uint64(seed)))
+</span><span class="gi"></span>        }
+        return s
+ }
+</code></pre></div><p>to gofuzz allows go-fuzz to find a crasher (1337) for <em>MyFunc</em>
+almost instantaneously.</p>
+<p>The improvement here is to keep the bytes used to seed the
+random number generator for use as material to build objects.</p>
+<h2 id="conclusions">Conclusions</h2>
+<p>Gofuzz&rsquo;s (no hyphen) <em>NewFromGoFuzz</em> can break some of the clever
+tricks go-fuzz has to increase code coverage. In particular, it
+appears to break literal and sonar feedback.</p>
+<p>A simple patch can be applied to work around this but, as we&rsquo;ll
+see in later posts, there are more issues to contend with.</p>
+
+
+    <h2>2021-11-02
+    Luarocks MITM
+    </h2>
+    <h2 id="background">Background</h2>
+<p><a href="https://luarocks.org/">LuaRocks</a> is a package manager for <a href="https://www.lua.org/">Lua</a>. The executable &ldquo;luarocks&rdquo; allows users to</p>
+<ul>
+<li>download Lua packages and dependencies from luarocks.org (the default)</li>
+<li>upload packages to luarocks.org</li>
+</ul>
+<p>Several months ago <a href="https://github.com/luarocks/luarocks/issues/1215">I found a man-in-the-middle vulnerability</a> and reported it to the
+LuaRocks project via Gitter. I was directed to create a public issue on github. At the time of writing, there&rsquo;s no CVE assigned by the project or github security
+notification.</p>
+<p>The bug is that while TLS is used to make connections to luarocks.org, then certificate returned by the site is not checked. This step is crucial in establishing the identity of
+luarocks.org and without it, an attacker who can intercept and
+modify traffic can impersonate the LuaRocks server.</p>
+<h2 id="severity">Severity</h2>
+<p>To give an indication of the severity of the bug, let&rsquo;s breakdown all the opportunities it presents to an attacker.</p>
+<h3 id="scenario-1-victim-is-a-consumer-of-luarocks">Scenario #1: Victim is a consumer of LuaRocks</h3>
+<p>Our victim uses LuaRocks to install packages. If an attacker can be a man-in-the-middle anywhere between the victim and luarocks.org, then
+requested packages can be replaced with malicious versions which can do some pretty nasty stuff. For example, luarocks will run
+arbitrary commands specified in a <a href="https://github.com/luarocks/luarocks/wiki/Rockspec-format">rockspec</a> file. Here&rsquo;s an example of luarocks deleting a directory:</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">➜  foo git:<span class="o">(</span>master<span class="o">)</span> ✗ cat foo-scm-1.rockspec 
+<span class="nv">package</span> <span class="o">=</span> <span class="s2">&#34;foo&#34;</span>
+<span class="nv">version</span> <span class="o">=</span> <span class="s2">&#34;scm-1&#34;</span>
+<span class="nb">source</span> <span class="o">=</span> <span class="o">{</span>
+   <span class="nv">url</span> <span class="o">=</span> <span class="s2">&#34;&#34;</span>
+<span class="o">}</span>
+<span class="nv">description</span> <span class="o">=</span> <span class="o">{</span>
+   <span class="nv">license</span> <span class="o">=</span> <span class="s2">&#34;*** please specify a license ***&#34;</span>
+<span class="o">}</span>
+<span class="nv">dependencies</span> <span class="o">=</span> <span class="o">{}</span>
+<span class="nv">build</span> <span class="o">=</span> <span class="o">{</span>
+   <span class="nb">type</span> <span class="o">=</span> <span class="s2">&#34;command&#34;</span>,
+   <span class="nv">modules</span> <span class="o">=</span> <span class="o">{}</span>,
+   <span class="nv">build_command</span> <span class="o">=</span> <span class="s2">&#34;rm -rf bar&#34;</span>
+<span class="o">}</span>
+➜  foo git:<span class="o">(</span>master<span class="o">)</span> ✗ ls
+foo-scm-1.rockspec
+➜  foo git:<span class="o">(</span>master<span class="o">)</span> ✗ mkdir bar <span class="c1">#this will get deleted</span>
+➜  foo git:<span class="o">(</span>master<span class="o">)</span> ✗ luarocks make --local        
+rm -rf bar
+foo scm-1 is now installed in /home/vscode/.luarocks <span class="o">(</span>license: *** please specify a license ***<span class="o">)</span>
+
+➜  foo git:<span class="o">(</span>master<span class="o">)</span> ✗ ls
+foo-scm-1.rockspec
+</code></pre></div><p>You&rsquo;re only limited by your imagination and the linux permissions available (which may be root, the &ldquo;&ndash;local&rdquo; flag is not the default).
+My imagination suggests stealing ssh keys, installing backdoors etc.</p>
+<p>If the victim is in the business of creating software and uses LuaRocks as part of a software supply chain, then things get really interesting. It&rsquo;s possible to use this vulnerability to inject malicious code into software products turning this vulnerability for our
+hapless victim into a security problem for their customers, constituents, patients, students etc (not all software is written for corporations).</p>
+<h3 id="scenario-2-victim-is-a-lua-package-maintainer">Scenario #2: Victim is a Lua package maintainer</h3>
+<p>As a man-in-the-middle, the attacker can</p>
+<ul>
+<li>steal the victim&rsquo;s luarocks API key</li>
+<li>modify package uploads in-flight</li>
+</ul>
+<p>This would allow an attacker to attack all the consumers of the
+victim&rsquo;s packages.</p>
+<h2 id="can-this-really-be-exploited">Can This Really Be Exploited?</h2>
+<p>TLS and certificate checking exist for a reason. It&rsquo;s not just about encryption for privacy; <a href="https://docs.google.com/document/pub?id=1roBIeSJsYq3Ntpf6N0PIeeAAvu4ddn7mGo6Qb7aL7ew">it&rsquo;s about establishing the identity of the
+remote party</a>. There are many points where an attacker could redirect your traffic to a malicious server (be a MITM). Any party on the path
+between the victim and the server can act as a man-in-the-middle: I&rsquo;d suggest thinking twice about using an open wifi network with LuaRocks
+before this is fixed. An attacker who can influence DNS responses for luarocks.org can redirect a victim without needing to be a traditional
+man-in-the-middle. There are many ways this can happen: compromise of a local DNS resolver, DNS cache poisoning, DNS misconfiguration,
+compromise of the DNS registrar account for luarocks.org etc. Attackers can get quite creative about chaining together exploits to make something
+greater than the sum of the parts.</p>
+<h2 id="luarocks-response">LuaRock&rsquo;s Response</h2>
+<p>I&rsquo;ve been on the receiving end of bug reports when running
+a <a href="https://www.first.org/standards/frameworks/psirts/psirt_services_framework_v1.1">PSIRT</a>. I&rsquo;ve also reported my fair share
+of bugs to vendors so I have a good idea of indicators of a
+mature product. Let&rsquo;s start with the basics.</p>
+<blockquote>
+<p>Who do I contact if I find a security issue?</p>
+</blockquote>
+<p>The project doesn&rsquo;t have a prominent set of instructions for
+reporting security bugs. If the bug finder doesn&rsquo;t know who
+to report to, then coordinated responses are difficult. In this
+case I asked on the project&rsquo;s gitter and was told to create a
+public issue on github.</p>
+<p>A simple change LuaRocks could make is to create a <a href="https://github.com/luarocks/luarocks/security/policy">security policy</a> on github. They could also add a <a href="https://securitytxt.org/">security.txt</a> to luarocks.org to point security researchers to their policy.</p>
+<blockquote>
+<p>What should the policy be?</p>
+</blockquote>
+<p>I have strong opinions on that but they aren&rsquo;t really relevant.
+The project is run by volunteers and they can do whatever they
+like: they are free to just shrug off serious vulnerabilities. If
+that&rsquo;s the case, then it&rsquo;s probably best to state that clearly so
+users can choose their own risk.</p>
+
+
+    <h2>2021-10-01
+    Go-Fuzz
+    </h2>
+    <p>I&rsquo;ve found plenty of &ldquo;crashers&rdquo; using <a href="https://github.com/dvyukov/go-fuzz">go-fuzz</a>. If you browse the <a href="https://github.com/dvyukov/go-fuzz#trophies">trophy cabinet</a>, you&rsquo;ll notice that I added a few. With Golang being a memory-safe language, the impact
+of these bugs is reduced to denial of service vectors. I&rsquo;d like to point out here that fuzzing can be used for so much more than shaking out off-by-one
+errors: if we know invariants or properties that our function outputs must satisfy, then we can build fuzz tests to check for violations.</p>
+<h2 id="captain-hindsighthttpssouthparkfandomcomwikicaptain_hindsight"><a href="https://southpark.fandom.com/wiki/Captain_Hindsight">Captain Hindsight</a></h2>
+<p>There are examples of how <a href="https://google.github.io/clusterfuzz/setting-up-fuzzing/heartbleed-example/">fuzzing</a>, <a href="https://blog.trailofbits.com/2014/04/27/using-static-analysis-and-clang-to-find-heartbleed/">static analysis</a> and even <a href="https://blog.trailofbits.com/2018/04/04/vulnerability-modeling-with-binary-ninja/">symbolic execution</a> <em>could have been</em> used to find the famous <a href="https://en.wikipedia.org/wiki/Heartbleed">heartbleed</a> bug.
+It&rsquo;s all lovely stuff but it&rsquo;s easy to take a known bug and show how your favourite toys can perform. Hindsight is a wonderful thing.</p>
+<p>I&rsquo;m going to do something similar here and show how, with the benefit of hindsight, fuzzing could
+have found a security issue. Where I hope I depart from other examples of this kind of potentially annoying retrospect is in showing that there are plenty of places where
+fuzzing can be applied in golang without doing major code surgery, learning a fancy new tool or taking a deep dive into the science of SAT solvers etc.
+At the end of this ramble, I give my hot-take on why fuzzing isn&rsquo;t more pervasive in golang code.</p>
+<p>In this <a href="https://github.com/sourcegraph/sourcegraph/security/advisories/GHSA-mx43-r985-5h4m">issue with Sourcegraph</a>,
+the function <em>SafeRedirectURL</em> was found to have a corner case which could lead to an <a href="https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html">open-redirect</a>.</p>
+<p>I think this is a great example of where fuzzing is straight-forward to apply</p>
+<ul>
+<li><em>SafeRedirectURL</em> is a pure function (not necessary but makes life easier)</li>
+<li>it takes only one unstructured argument</li>
+<li>the security requirements for the function can be expressed concisely in code</li>
+</ul>
+<p>Let&rsquo;s consider the last point. <em>SafeRedirectURL</em> should only return relative URLs. A necessary condition for this is that the string returned by SafeRedirectURL, when parsed into a URL, has no host component. In golang,</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="nx">u</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">url</span><span class="p">.</span><span class="nf">Parse</span><span class="p">(</span><span class="nf">SafeRedirectURL</span><span class="p">(</span><span class="nx">urlString</span><span class="p">))</span>
+<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+    <span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span> <span class="c1">// should this ever happen?
+</span><span class="c1"></span><span class="p">}</span>
+<span class="k">if</span> <span class="nx">u</span><span class="p">.</span><span class="nx">Host</span> <span class="o">!=</span> <span class="s">&#34;&#34;</span> <span class="p">{</span>
+    <span class="nb">panic</span><span class="p">(</span><span class="s">&#34;oops, something has went wrong&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Concretely, here&rsquo;s how you could fuzz SafeRedirectURL (from before the fix):</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">sourcegraph</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+    <span class="s">&#34;net/url&#34;</span>
+    <span class="s">&#34;strings&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">SafeRedirectURL</span><span class="p">(</span><span class="nx">urlStr</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+    <span class="nx">u</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">url</span><span class="p">.</span><span class="nf">Parse</span><span class="p">(</span><span class="nx">urlStr</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="o">||</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">HasPrefix</span><span class="p">(</span><span class="nx">u</span><span class="p">.</span><span class="nx">Path</span><span class="p">,</span> <span class="s">&#34;/&#34;</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="s">&#34;/&#34;</span>
+    <span class="p">}</span>
+
+    <span class="c1">// Only take certain known-safe fields.
+</span><span class="c1"></span>    <span class="nx">u</span> <span class="p">=</span> <span class="o">&amp;</span><span class="nx">url</span><span class="p">.</span><span class="nx">URL</span><span class="p">{</span><span class="nx">Path</span><span class="p">:</span> <span class="nx">u</span><span class="p">.</span><span class="nx">Path</span><span class="p">,</span> <span class="nx">RawQuery</span><span class="p">:</span> <span class="nx">u</span><span class="p">.</span><span class="nx">RawQuery</span><span class="p">}</span>
+    <span class="k">return</span> <span class="nx">u</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">Fuzz</span><span class="p">(</span><span class="nx">input</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+    <span class="nx">s</span> <span class="o">:=</span> <span class="nf">SafeRedirectURL</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">input</span><span class="p">))</span>
+    <span class="nx">u</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">url</span><span class="p">.</span><span class="nf">Parse</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="mi">0</span>
+    <span class="p">}</span>
+
+    <span class="c1">// if u.Host is non-empty then this is definitely not a relative URL
+</span><span class="c1"></span>    <span class="k">if</span> <span class="nx">u</span><span class="p">.</span><span class="nx">Host</span> <span class="o">!=</span> <span class="s">&#34;&#34;</span> <span class="p">{</span>
+        <span class="nb">panic</span><span class="p">(</span><span class="nx">u</span><span class="p">.</span><span class="nx">Host</span><span class="p">)</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="mi">1</span>
+<span class="p">}</span>
+</code></pre></div><p>The fuzzer will input byte slices which are chosen to increase code coverage. When inputs are found which violate our condition on <em>u.Host</em>, <em>Fuzz</em> will panic
+and the fuzzer will  register this as a <em>crasher</em>.</p>
+<p>I tried this to see how long it&rsquo;d take to find a bug and it was pretty much
+(from a human point of view) instantaneous. I have a mid-range Ryzen laptop
+which is nothing special by modern standards.</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">$ go-fuzz
+2021/01/10 19:13:21 workers: 8, corpus: <span class="m">155</span> <span class="o">(</span>0s ago<span class="o">)</span>, crashers: 65, restarts: 1/0, execs: <span class="m">0</span> <span class="o">(</span>0/sec<span class="o">)</span>, cover: 0, uptime: 3s
+</code></pre></div><p>That is, 65 inputs were found in 3 seconds which violate our expectation of <em>SafeRedirectURL</em>. What did these look like? Here&rsquo;s a representative example input</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">//0//k0
+</code></pre></div><p>with output from <em>SafeRedirectURL</em> of</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">//k0
+</code></pre></div><p>Sadly, that&rsquo;s exactly what we don&rsquo;t want: an <em>absolute URL</em>. The URL may look a bit odd without a scheme but browsers will accept it and work out the scheme from the
+context. There&rsquo;s clearly a problem with inputs whose path starts have a double forward slash. That&rsquo;s reassuring as that&rsquo;s exactly what the <a href="https://github.com/sourcegraph/sourcegraph/pull/10167">fix</a> addresses.
+Even better, when the fix is applied to the fuzzing code, a few minutes of fuzzing results in no issues being found.</p>
+<p>What should stand out here is that you don&rsquo;t need to know that much about URL parsing to find issues with the fuzzer. You need to know the basic standard library functions but the fuzzer can find the corner cases by trying to cover as much of that library code as possible. You can explore the coverage <a href="/pages/coverage.html">here</a>.</p>
+<h2 id="a-few-minutes-of-fuzzing">A Few Minutes of Fuzzing</h2>
+<p>That&rsquo;s a bit of a throwaway line. How long should we fuzz for exactly? That&rsquo;s not really known. This puts this kind of testing outside of what usually runs
+in Continuous Integration as tests which are quick and deterministic are required.</p>
+<h2 id="barriers-to-adoption-of-fuzzing">Barriers to Adoption of Fuzzing</h2>
+<ul>
+<li>Friction: It&rsquo;s not yet a <a href="https://go.googlesource.com/proposal/+/master/design/draft-fuzzing.md#:~:text=The%20goal%20is%20to%20make%20fuzzing%20a%20first-class,the%20basis%20for%20experiments%20with%20different%20mutation%20engines.">first class language feature of Go</a></li>
+<li>CI: it can take an unknown time to get good coverage</li>
+<li>Misconceptions: it appears to be about finding illegal array accesses etc</li>
+</ul>
+
+
+    <h2>2021-06-01
+    Golang Testing
+    </h2>
+    <p>My (very opinionated) checklist/cheatsheet for Golang testing. Nothing particularly original here.</p>
+<h2 id="tactics">Tactics</h2>
+<h3 id="tactic-testable-example">Tactic: Testable Example</h3>
+<p>Start with a <a href="https://blog.golang.org/examples">testable example</a>, if you can. This is invaluable documentation and will tell you if the
+code has a usable interface, has too-many moving parts etc.</p>
+<h3 id="tactic-table-driven-tests">Tactic: Table-Driven Tests</h3>
+<p><a href="https://dave.cheney.net/2019/05/07/prefer-table-driven-tests">Dave Chaney</a> makes the case for table-driven tests.</p>
+<h3 id="tactic-network-testing">Tactic: Network Testing</h3>
+<p>Avoid hard coding listener port numbers. Overcome the problems of port and address allocations by letting the operating system choose the port.
+Every (Go) programmer should know the following trick:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// allocate a loopback listener with a port chosen by the operating system
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">newLoopbackListener</span><span class="p">()</span> <span class="p">(</span><span class="nx">net</span><span class="p">.</span><span class="nx">Listener</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="nx">net</span><span class="p">.</span><span class="nf">Listen</span><span class="p">(</span><span class="s">&#34;127.0.0.1:0&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Here, a net.Listener is created without hard coding the port. This allows us to run many tests in parallel without port conflicts.
+If you run out of ports, then you could always move to the other loopback addresses: 127.0.0.n for n=2,3,&hellip;</p>
+<p>Say we write a server implementing the following minimal interface:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">type</span> <span class="nx">Server</span> <span class="kd">interface</span> <span class="p">{</span>
+    <span class="c1">// Start the server processing requests
+</span><span class="c1"></span>    <span class="nf">Start</span><span class="p">()</span> <span class="kt">error</span>
+    <span class="c1">// Stop the server and return
+</span><span class="c1"></span>    <span class="nf">Stop</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><p>Then we can imagine testing its client as follows:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">TestServer</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">lis</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">newLoopbackListener</span><span class="p">()</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="nx">t</span><span class="p">.</span><span class="nf">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+    <span class="p">}</span>
+    <span class="nx">server</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">NewServer</span><span class="p">(</span><span class="nx">l</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="nx">t</span><span class="p">.</span><span class="nf">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="k">go</span> <span class="nx">server</span><span class="p">.</span><span class="nf">Start</span><span class="p">()</span>
+    <span class="k">defer</span> <span class="nx">server</span><span class="p">.</span><span class="nf">Stop</span><span class="p">()</span>
+
+    <span class="nx">client</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">NewClient</span><span class="p">(</span><span class="nx">lis</span><span class="p">.</span><span class="nf">Addr</span><span class="p">())</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="nx">t</span><span class="p">.</span><span class="nf">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="c1">// do testing stuff
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>This removes the need to mock listeners, client connections etc.</p>
+<h3 id="tactic-golden-files">Tactic: Golden Files</h3>
+<p>Hashicorp uses this <a href="https://github.com/hashicorp/consul/blob/87f6617eecd23a64add1e79eb3cd8dc3da9e649e/agent/xds/golden_test.go#L36">trick</a>:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// golden reads and optionally writes the expected data to the golden file,
+</span><span class="c1">// returning the contents as a string.
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">golden</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">,</span> <span class="nx">name</span><span class="p">,</span> <span class="nx">subname</span><span class="p">,</span> <span class="nx">got</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="nx">t</span><span class="p">.</span><span class="nf">Helper</span><span class="p">()</span>
+
+	<span class="nx">suffix</span> <span class="o">:=</span> <span class="s">&#34;.golden&#34;</span>
+	<span class="k">if</span> <span class="nx">subname</span> <span class="o">!=</span> <span class="s">&#34;&#34;</span> <span class="p">{</span>
+		<span class="nx">suffix</span> <span class="p">=</span> <span class="nx">fmt</span><span class="p">.</span><span class="nf">Sprintf</span><span class="p">(</span><span class="s">&#34;.%s.golden&#34;</span><span class="p">,</span> <span class="nx">subname</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">golden</span> <span class="o">:=</span> <span class="nx">filepath</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="s">&#34;testdata&#34;</span><span class="p">,</span> <span class="nx">name</span><span class="o">+</span><span class="nx">suffix</span><span class="p">)</span>
+	<span class="k">if</span> <span class="o">*</span><span class="nx">update</span> <span class="o">&amp;&amp;</span> <span class="nx">got</span> <span class="o">!=</span> <span class="s">&#34;&#34;</span> <span class="p">{</span>
+		<span class="nx">err</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">WriteFile</span><span class="p">(</span><span class="nx">golden</span><span class="p">,</span> <span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">got</span><span class="p">),</span> <span class="mo">0644</span><span class="p">)</span>
+		<span class="nx">require</span><span class="p">.</span><span class="nf">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">expected</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="nx">golden</span><span class="p">)</span>
+	<span class="nx">require</span><span class="p">.</span><span class="nf">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+
+	<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">expected</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Golden test data can be used for outputs that you don&rsquo;t know in precise detail up front but can inspect for correctness once you have them. You run your tests
+with the &ldquo;update&rdquo; flag first, then inspect the golden file to see if it is correct and then finally commit the golden file to your repository.
+Subsequent tests will use this data as the <em>gold standard</em>.</p>
+<h3 id="tactic-metamorphic-testing">Tactic: Metamorphic Testing</h3>
+<p>Wayne Hillel give an excellent overview of metamorphic testing <a href="https://www.hillelwayne.com/post/metamorphic-testing/">here</a>. If <em>f</em> is the function
+under test, <em>x</em> is some golden test data and <em>T</em> is some transformation of the data, then we should test that the relationship between <em>f(x)</em> and <em>f(Tx)</em>
+is as we expect. The skill here is thinking up interesting transforms <em>T</em>. A good place to start is with those for which <em>f</em> is <em>invariant</em>. That is, <em>T</em> such that <em>f(Tx) = f(x)</em>. Other important cases are idempotent functions and round-trip guarantees e.g. <em>Decode(Encode(x)) == x</em></p>
+<h3 id="tactic-fuzz">Tactic: Fuzz</h3>
+<p>Fuzzing is really a subject unto itself. However, it&rsquo;s not hard to add the green shoots of fuzz testing. A good start is to simply fuzz a function and see if it crashes e.g. <a href="https://github.com/trustelem/zxcvbn/commit/c2422dd63cdfab8ebc99174ce967424ab9088624">https://github.com/trustelem/zxcvbn/commit/c2422dd63cdfab8ebc99174ce967424ab9088624</a>.</p>
+<p>Fuzzing can be combined with metamorphic testing to cover more code.</p>
+<h2 id="use-abstraction-but-not-too-much">Use Abstraction but Not Too Much</h2>
+<p>Try to decouple code from OS resources (sockets, file handles etc) by judicious use of abstraction. For example, this</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">Foo</span><span class="p">(</span><span class="nx">filename</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">Result</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">f</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">filename</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+    <span class="p">}</span>
+    <span class="k">defer</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+    <span class="c1">// Do amazing customer pleasing stuff here
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>can be refactored to</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">FooReader</span><span class="p">(</span><span class="nx">r</span> <span class="nx">io</span><span class="p">.</span><span class="nx">Reader</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">Result</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">// Do amazing customer pleasing stuff here
+</span><span class="c1"></span><span class="p">}</span>
+<span class="kd">func</span> <span class="nf">Foo</span><span class="p">(</span><span class="nx">filename</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">Result</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">f</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">filename</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+    <span class="p">}</span>
+    <span class="k">defer</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+    <span class="k">return</span> <span class="nf">FooReader</span><span class="p">(</span><span class="nx">f</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Now we can test the function <em>FooReader</em> without creating files:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">TestFooReader</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">testReader</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">NewReader</span><span class="p">(</span><span class="s">&#34;some test data&#34;</span><span class="p">)</span>
+    <span class="nx">res</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">FooReader</span><span class="p">(</span><span class="nx">testReader</span><span class="p">)</span>
+    <span class="c1">// do some checking here based on expectations
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>Mocking resources such as databases can be very useful but care should be taken not to try to mock too much. There&rsquo;s a point where you&rsquo;re better off
+doing integration tests or end-to-end tests.</p>
+<p>Where mocking shines is testing error handling paths. There&rsquo;s some <a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-yuan.pdf">evidence</a> to suggest that many of the critical failures observed in distributed systems occur in (presumably) untested error handling paths. In our example, we could <a href="https://talks.golang.org/2012/10things.slide#8">mock
+the filesystem</a>:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">var</span> <span class="nx">fs</span> <span class="nx">fileSystem</span> <span class="p">=</span> <span class="nx">osFS</span><span class="p">{}</span>
+
+<span class="kd">type</span> <span class="nx">fileSystem</span> <span class="kd">interface</span> <span class="p">{</span>
+    <span class="nf">Open</span><span class="p">(</span><span class="nx">name</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">file</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+    <span class="nf">Stat</span><span class="p">(</span><span class="nx">name</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">FileInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">type</span> <span class="nx">file</span> <span class="kd">interface</span> <span class="p">{</span>
+    <span class="nx">io</span><span class="p">.</span><span class="nx">Closer</span>
+    <span class="nx">io</span><span class="p">.</span><span class="nx">Reader</span>
+    <span class="nx">io</span><span class="p">.</span><span class="nx">ReaderAt</span>
+    <span class="nx">io</span><span class="p">.</span><span class="nx">Seeker</span>
+    <span class="nf">Stat</span><span class="p">()</span> <span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">FileInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// osFS implements fileSystem using the local disk.
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">osFS</span> <span class="kd">struct</span><span class="p">{}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">osFS</span><span class="p">)</span> <span class="nf">Open</span><span class="p">(</span><span class="nx">name</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">file</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>        <span class="p">{</span> <span class="k">return</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">name</span><span class="p">)</span> <span class="p">}</span>
+<span class="kd">func</span> <span class="p">(</span><span class="nx">osFS</span><span class="p">)</span> <span class="nf">Stat</span><span class="p">(</span><span class="nx">name</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">FileInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Stat</span><span class="p">(</span><span class="nx">name</span><span class="p">)</span> <span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">foo</span><span class="p">(</span><span class="nx">filename</span> <span class="kt">string</span><span class="p">,</span> <span class="nx">fs</span> <span class="nx">filesystem</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">Result</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">f</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">fs</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">filename</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">err</span>
+    <span class="p">}</span>
+    <span class="c1">// Do amazing customer pleasing stuff here
+</span><span class="c1"></span><span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">Foo</span><span class="p">(</span><span class="nx">filename</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="o">*</span><span class="nx">Result</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="nf">foo</span><span class="p">(</span><span class="nx">filename</span><span class="p">,</span> <span class="nx">fs</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>When testing, we can create a <em>filesystem</em> implementation which injects errors. Something along the lines of this:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">type</span> <span class="nx">faultFS</span> <span class="kd">struct</span><span class="p">{}</span>
+<span class="kd">type</span> <span class="nx">faultFile</span> <span class="kd">struct</span><span class="p">{}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">faultFile</span><span class="p">)</span> <span class="nf">Close</span><span class="p">()</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;close failed&#34;</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="c1">// Exercise for the interested reader to provide Read, ReadAt, Write, Close, Seeker and Stat for faultFile
+</span><span class="c1"></span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">faultFS</span><span class="p">)</span> <span class="nf">Open</span><span class="p">(</span><span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">file</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="nx">faultFile</span><span class="p">{}</span> <span class="p">}</span>
+<span class="kd">func</span> <span class="p">(</span><span class="nx">faultFS</span><span class="p">)</span> <span class="nf">Stat</span><span class="p">(</span><span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">FileInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span><span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;not supported&#34;</span><span class="p">)}</span>
+
+<span class="kd">func</span> <span class="nf">TestFoo</span><span class="p">(</span><span class="nx">t</span> <span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nx">res</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nf">foo</span><span class="p">(</span><span class="s">&#34;foo&#34;</span><span class="p">,</span> <span class="nx">faultFS</span><span class="p">{})</span>
+    <span class="c1">// check the results
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>IMHO, mocking doesn&rsquo;t work well when imitating complex systems like databases. I prefer to use container technology to spin up an actual instance of the database and test against that. If you need quite sophisticated fault injection, then it&rsquo;d pay to write a library for this. How much effort you put
+into this is a value judgement.</p>
+<h2 id="integration-tests-vs-unit-tests">Integration Tests vs Unit Tests</h2>
+<p>Instead of mocking a complex sub-system, consider making an integration test which uses an instance of the real service in a container. For example, starting
+a docker container from golang is pretty <a href="https://golang.testcontainers.org/">straight-forward</a>. Such tests can be resource intensive so can be hidden behind <a href="https://golang.org/pkg/go/build/#hdr-Build_Constraints">build tags</a> or <a href="https://golang.org/pkg/testing/#hdr-Skipping">skipped</a> when the short flag is used.</p>
+<p>The challenge here is in avoiding flaky tests caused by having to wait for the service to come online (port open, accepting requests etc). That said, if errors returned by the code don&rsquo;t allow for graceful retries, the client fails to timeout in a reasonable way etc, then that&rsquo;s a worthwhile finding in itself.</p>
+
+
+    <h2>2021-05-01
+    Weekend Projects
+    </h2>
+    <p>Brain dump of potential weekend/lockdown projects.</p>
+<h2 id="threat-modelling-tool">Threat Modelling Tool</h2>
+<p>When I make a threat model, I draw ascii art, do doodles, write descriptions but it&rsquo;d be nicer to have
+some tools which allowed me to</p>
+<ol>
+<li>specify a threat model in a near natural language</li>
+<li>generate diagrams from the threat models</li>
+</ol>
+<h3 id="threat-modelling-language">Threat Modelling Language</h3>
+<p>The language would be as close to English as possible. Simple sentences along the lines of</p>
+<pre><code>The loadbalancer has a certificate
+The certificate expires next month
+The loadbalancer has 6 backend servers
+</code></pre><p>Lexical analysis tools would allow this to be converted into a graph representation of the system. Nodes would be nouns, edges verbs and
+there&rsquo;d be rudimentary understanding of number. Tools which understand the nouns and verbs could be build on top of this to, for example,
+suggest OWASP rules to check.</p>
+<h3 id="graphical-representation">Graphical Representation</h3>
+<p>One such tool built on the graph representation could render a nice graphical representation of the system. Output like <a href="https://github.com/mingrammer/diagrams">this tool</a> creates but with more icons for threats would be just the thing.</p>
+<p>Integrations with Hugo (for blogging) and vscode would allow developers to quickly describe a system and threats and generate diagrams.</p>
+<h2 id="ijon-for-golang">IJON for Golang</h2>
+<p>I&rsquo;ve <a href="https://github.com/stevenjohnstone/afl-lua#51-annotations">experimented</a> a bit with creating a fuzzer for Lua with some advanced features like <a href="https://github.com/RUB-SysSec/ijon">IJON</a>. I&rsquo;d like to add similar functionality to <a href="https://github.com/dvyukov/go-fuzz">go-fuzz</a>.</p>
+<h2 id="fuzzers-with-novel-guidance-schemes">Fuzzers with Novel Guidance Schemes</h2>
+<p>I&rsquo;d like to experiment with fuzzing by using signals other than code coverage. It&rsquo;d be useful when studying black box embedded systems to be able to
+detect new coverage by</p>
+<ul>
+<li>power draw</li>
+<li>EM radiation/noise</li>
+<li>temperature changes</li>
+</ul>
+<p>In systems running on personal computers, signals like</p>
+<ul>
+<li>cache statistics</li>
+<li>memory usage</li>
+<li>stack size</li>
+<li>heap statistics</li>
+<li>file descriptor usage</li>
+</ul>
+<p>may be of interest.</p>
+
+
+    <h2>2021-04-01
+    TIS-100
+    </h2>
+    <p><a href="https://en.wikipedia.org/wiki/TIS-100">TIS-100</a> is nerd-heaven. Competing against friends on Steam had me fall into
+a vortex for a few days over Christmas. So far, I&rsquo;ve avoided spoilers and solutions on the internets and don&rsquo;t want to add any.
+The fun really is in finding your own solutions.</p>
+<p>I&rsquo;ve thought up a couple of TIS-100 hobby projects to try when I have the time and inspiration. Maybe someone has done it already but that&rsquo;s not
+really the point. I don&rsquo;t have any pressing need for tools for TIS-100 but I could learn a lot from <a href="https://github.com/angea/pocorgtfo/blob/master/contents/issue02.pdf#page=3">building</a> them.</p>
+<h2 id="modelling-solutions-with-tlapluscal">Modelling Solutions with TLA+/PlusCal</h2>
+<p>It&rsquo;d be interesting to model solutions with <a href="https://en.wikipedia.org/wiki/TLA%2B">TLA+</a> or <a href="https://en.wikipedia.org/wiki/PlusCal">PlusCal</a>, building whatever intermediate tools are necessary. After all, TIS-100 is a distributed system with very constrained computers as nodes. This could make for a very fun course on formal methods for distributed systems.</p>
+<h2 id="ssa">SSA</h2>
+<p>I&rsquo;d like to have a shot at writing a compiler that&rsquo;d transform TIS-100 code in <a href="https://en.wikipedia.org/wiki/Static_single_assignment_form">SSA</a> form.
+Once in that form, the likes of <a href="https://github.com/Z3Prover/z3">z3</a> could be leveraged to check if a solution satisfies various constraints (like solving the problem). Something along the lines of <a href="/posts/xchg-rax-rax">this</a> post.</p>
+<p>Maybe this would be a chance to explore <a href="https://www.llvm.org/docs/tutorial/MyFirstLanguageFrontend/index.html">LLVM</a> a bit deeper? Maybe I&rsquo;d just build something from scratch just for a laugh? We&rsquo;ll see.</p>
+
+
+    <h2>2021-03-01
+    Startups: Codian
+    </h2>
+    <h2 id="introduction">Introduction</h2>
+<p>I&rsquo;ve spent most of my career in startups which would go on to be acquired by Cisco (twice). As a cheap form of therapy, I&rsquo;m
+collecting some of my &ldquo;learnings&rdquo; here.</p>
+<h2 id="ancient-history">Ancient History</h2>
+<p>I joined <a href="https://en.wikipedia.org/wiki/Tandberg#Codian">Codian</a> in the summer of 2006. I was nearing completion of my PhD, had a one-year old child and far too much student debt.
+I&rsquo;d decided that I didn&rsquo;t want to follow an academic career. Or maybe I just couldn&rsquo;t afford to bring up a family on a post-doc
+stipend. Take your pick. I&rsquo;d been looking at the usual destinations for mathematics graduates (financial institutions etc) and it all
+seemed a bit soulless.</p>
+<p>A recruiter hooked me up with Codian; I was told that Codian made some kind of hi-fi equipment and were looking
+for someone to write code <em>or something</em> (I couldn&rsquo;t believe this guy got kilopounds when I took the job). Turned out, Codian were a startup in video conferencing and were looking for
+someone to automate their manufacturing test systems. Eventually. But I&rsquo;d have to <em>turn the handle</em> on some very hands on processes in the
+day to day manufacturing of very specialised computer systems. As I automated things, I&rsquo;d free up time from manual labour which could be
+used to do more automation and so on in a virtuous cycle.</p>
+<p>It&rsquo;d be easy to rationalise why I joined with the hindsight of making some
+money on acquisition, starting a career path in low-level systems programming and eventually security work but that&rsquo;d be just making up
+a story. I joined because I didn&rsquo;t know any better. Could have easily been a disaster.</p>
+<p>I learned a lot from Codian: some bad, much good. I got off to a good start.</p>
+<h2 id="manufacturing-at-small-scale">Manufacturing at Small Scale</h2>
+<p>Codian made <a href="https://en.wikipedia.org/wiki/Multipoint_control_unit">MCUs</a> like this:</p>
+<p><img src="/images/codian/4500.jpg" alt="Codian MCU 4500"></p>
+<p>These are embedded systems with, for the time, a lot of DSP compute. Codian designed them, wrote software for them and built them (with help from specialist
+manufacturers).</p>
+<p>At the point I joined, all parts on the <a href="https://en.wikipedia.org/wiki/Bill_of_materials">BOM</a> were purchased and stored in our manufacturing cave in <a href="https://www.google.co.uk/maps/@51.5086887,-0.5445945,3a,75y,36.62h,83.69t/data=!3m6!1e1!3m4!1sHxMLF51J5M3WYgaomPiGTg!2e0!7i13312!8i6656">Langley</a>. This was high-value,
+low output manufacturing and it isn&rsquo;t entirely mental to be quite hands on in the early years. As builds were scheduled at our manufacturer, <a href="https://www.smselectronics.com/">SMS</a>, parts were picked (literally, by hand), boxed and sent via FedEx. Even the metal cases fabricated at our &ldquo;metal basher&rdquo; would be sent to us, stored, picked and sent on to SMS. Assembled systems would be delivered from SMS where we&rsquo;d perform testing by running various pieces of software and checking for errors (what I&rsquo;d been hired to improve). Finally, purchased systems would be packaged up and sent to customers. All this with a staff of three (including me) when I joined.</p>
+<h2 id="life-choices">Life Choices</h2>
+<p>Much of the goods-in came on <a href="https://en.wikipedia.org/wiki/Pallet">pallets</a> and by my first day we&rsquo;d amassed a large stockpile which was becoming a bit of a problem. My boss at the time gave me an electric sabre saw (we had a large collection of power tools for <em>reasons</em>) and told me to chop up the pallets and put them in the garbage. <em>This was my first assigned task in my new career</em>.</p>
+<p>So, I&rsquo;m in the car park on a nice sunny day having an amazingly good time dismembering pallets like I&rsquo;m Ash in <a href="https://www.imdb.com/title/tt0106308/">Army of Darkness</a> . Some minutes in I&rsquo;m halfway through destroying
+pallets when a truck appears and an irate (but salt of the earth) fella approaches me to ask why I&rsquo;m destroying <em>his</em> pallets. For a brief moment,
+I thought he might punch me but I was apologetic and wielding a saw. I directed him to talk to my boss and went for lunch to ponder my life choices.</p>
+<p>My first impressions of Codian were that it was chaos. In hindsight, I can see that it was order I&rsquo;d failed to understand. More on that later.</p>
+
+
+    <h2>2021-02-01
+    Golang Types and Secrets: Part 2
+    </h2>
+    <p>The <a href="/posts/types">previous post</a>, described how a simple toy authentication system could be improved by using a type definition to redact secrets when they are passed to fmt.Printf, logging functions etc. In this post, hiding the complexity of defending against timing attacks is outlined.</p>
+<p>Let&rsquo;s frame the discussion with a simple scenario: you run an online store with user accounts, you store usernames and you want to avoid <a href="https://blog.rapid7.com/2017/06/15/about-user-enumeration/">user enumeration</a>. You may not have user enumeration in your threat-model but if you care about GDPR, you should probably add it. In the <a href="/posts/types">previous post</a>, I outlined how to stop a secret ending up in a log message. Stopping personally identifiable information ending up in a log unintentionally could help avoid a hefty fine. So it makes sense to define a type to carry around usernames so they don&rsquo;t accidentally leak
+into log messages and the approach outlined previously is one way to go about it.</p>
+<p>Be warned: the code in the <a href="/posts/types">previous post</a> is vulnerable to timing attacks due to the comparison of the secret against a string using &ldquo;==&rdquo;. You can google plenty of <a href="https://www.cs.rice.edu/~dwallach/pub/crosby-timing2009.pdf">references</a> on timing attacks. The thing a developer needs to remember is:</p>
+<p><strong>If you have a secret and need to compare it to
+something, you need to use <a href="https://golang.org/pkg/crypto/subtle/">timing-independent comparison functions</a></strong>.</p>
+<p>Here&rsquo;s some code which shows how to ensure that
+comparisons are done safely for our hypothetical usernames with our previous &ldquo;log redaction&rdquo; folded in.</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;crypto/subtle&#34;</span>
+	<span class="s">&#34;fmt&#34;</span>
+<span class="p">)</span>
+
+<span class="c1">// Secret hides its data from the programmer so that unsafe comparisons are
+</span><span class="c1">// forbidden (or would require sneaky use of reflection)
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">Secret</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">data</span> <span class="p">[]</span><span class="kt">byte</span>
+<span class="p">}</span>
+
+<span class="c1">// String returns something suitable for logs
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">s</span> <span class="nx">Secret</span><span class="p">)</span> <span class="nf">String</span><span class="p">()</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="s">&#34;REDACTED&#34;</span>
+<span class="p">}</span>
+
+<span class="c1">// Equals is timing safe
+</span><span class="c1"></span><span class="kd">func</span> <span class="p">(</span><span class="nx">s</span> <span class="nx">Secret</span><span class="p">)</span> <span class="nf">Equals</span><span class="p">(</span><span class="nx">secret</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">bool</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="mi">1</span> <span class="o">==</span> <span class="nx">subtle</span><span class="p">.</span><span class="nf">ConstantTimeCompare</span><span class="p">(</span><span class="nx">s</span><span class="p">.</span><span class="nx">data</span><span class="p">,</span> <span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">secret</span><span class="p">))</span>
+<span class="p">}</span>
+
+
+<span class="c1">// Username is an alias of Secret to avoid user enumeration problems
+</span><span class="c1"></span><span class="kd">type</span> <span class="nx">Username</span> <span class="p">=</span> <span class="nx">Secret</span>
+
+<span class="kd">func</span> <span class="nf">NewUsername</span><span class="p">(</span><span class="nx">name</span> <span class="kt">string</span><span class="p">)</span> <span class="o">*</span><span class="nx">Username</span> <span class="p">{</span>
+	<span class="c1">// would be wise to consider unicode normalization here
+</span><span class="c1"></span>	<span class="k">return</span> <span class="o">&amp;</span><span class="nx">Username</span><span class="p">{</span> <span class="nx">data</span><span class="p">:</span> <span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">name</span><span class="p">)</span> <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">username</span> <span class="o">:=</span> <span class="nf">NewUsername</span><span class="p">(</span><span class="s">&#34;stevie&#34;</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;username: %s, known: %v\n&#34;</span><span class="p">,</span> <span class="nx">username</span><span class="p">,</span> <span class="nx">username</span><span class="p">.</span><span class="nf">Equals</span><span class="p">(</span><span class="s">&#34;stevie&#34;</span><span class="p">))</span>
+<span class="p">}</span>
+</code></pre></div>
+
+    <h2>2021-01-01
+    Golang Types and Secrets: Part 1
+    </h2>
+    <h2 id="a-toy-authentication-system">A Toy Authentication System</h2>
+<p>Suspend disbelief and consider the following toy authentication system:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">allowAccess</span><span class="p">(</span><span class="nx">secret</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">bool</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nx">secret</span> <span class="o">==</span> <span class="s">&#34;foo&#34;</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">secret</span> <span class="o">:=</span> <span class="s">&#34;foo&#34;</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Access: %v, Secret: %s&#34;</span><span class="p">,</span> <span class="nf">allowAccess</span><span class="p">(</span><span class="nx">secret</span><span class="p">),</span> <span class="nx">secret</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Try this at the Golang <a href="https://play.golang.org/p/zYFWdgh-5vF">playground</a>.</p>
+<h2 id="whats-wrong-with-this-code">What&rsquo;s wrong with this code?</h2>
+<p>In my work auditing Golang codebases, I often see secrets being passed around as strings or byte slices. While these are reasonable representations of the
+actual data, it&rsquo;d be better to use the type system to represent the <em>concept of a secret</em> and leverage type <em>operations</em> to make code safer.</p>
+<p>Consider the output of the above program:</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">Access: true, Secret: foo
+</code></pre></div><p>The secret &ldquo;foo&rdquo; is leaked. Generally speaking, secrets should not end up in logs but if this code were running in a container the secret would, most likely,  end up in the docker logs.</p>
+<p>Let&rsquo;s use a type definition to make the situation a little better:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">type</span> <span class="nx">Secret</span> <span class="kt">string</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">s</span> <span class="nx">Secret</span><span class="p">)</span> <span class="nf">String</span><span class="p">()</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="s">&#34;REDACTED&#34;</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">allowAccess</span><span class="p">(</span><span class="nx">secret</span> <span class="nx">Secret</span><span class="p">)</span> <span class="kt">bool</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nx">secret</span> <span class="o">==</span> <span class="s">&#34;foo&#34;</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="kd">var</span> <span class="nx">secret</span> <span class="nx">Secret</span> <span class="p">=</span> <span class="s">&#34;foo&#34;</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Access: %v, Secret: %s&#34;</span><span class="p">,</span> <span class="nf">allowAccess</span><span class="p">(</span><span class="nx">secret</span><span class="p">),</span> <span class="nx">secret</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>The type <em>Secret</em> has the underlying type <em>string</em> with all of string&rsquo;s useful operations. Crucially, when a Secret is passed to fmt.Printf the method <em>String()</em> is called to get a string representation and this is simply the string &ldquo;REDACTED&rdquo;. Running <a href="https://play.golang.org/p/Z92vfBVOTiB">this code at the playground</a> gives</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">Access: true, Secret: REDACTED
+</code></pre></div><p>What&rsquo;s been gained here?</p>
+<ol>
+<li>The code is now clearer about what is a secret and what is just a plain old string</li>
+<li>It&rsquo;s hard to accidentally send the secret to program output, logs etc.</li>
+</ol>
+
+
+    <h2>2020-19-09
+    Reporting Vulnerabilities To Snyk
+    </h2>
+    <p><a href="https://snyk.io">Snyk</a> is a CNA for Golang packages (and other popular languages). When I learned that they&rsquo;d accept vulnerability reports, I decided to
+<a href="https://snyk.io/vulnerability-disclosure/">try them</a> out with a couple of old bugs which I&rsquo;d reported but got no response from the project author.</p>
+<p>The turnaround on these issues was very quick (a couple of hours, on a weekend no less) and there are now two CVEs assigned:
+<a href="https://snyk.io/vuln/SNYK-GOLANG-GITHUBCOMRUSSELLHAERINGGOXMLDSIG-608301">CVE-2020-7711</a> and <a href="https://snyk.io/vuln/SNYK-GOLANG-GITHUBCOMRUSSELLHAERINGGOSAML2-608302">CVE-2020-7731</a>.</p>
+
+
+    <h2>2020-08-02
+    Four of a Kind
+    </h2>
+    <p>I stumbled across a blog from a really interesting pioneer of computing, <a href="https://www.software-artist.com/">David S Maynard</a>. <a href="https://www.software-artist.com/joy-of-coding-observable/">This post about a probability puzzle</a> nerd-sniped me. The problem statement is:</p>
+<pre><code>Imagine we have a deck of 52 standard playing cards.
+
+First question:  How many cards do we have to draw until we can be sure
+that we have four of a kind?  In other words:  What is the minimum
+number of cards we must draw until we can be certain that four of those
+cards are the same kind?
+
+Second question:  What if we started from a tall stack made of TWO decks
+of 52 standard playing cards.  How many cards do we have to draw from
+this stack until we can be sure that we have four of a kind, where it's
+OK to have two of a kind from the same suit?
+
+Third question:  On average, with a standard deck of cards, how many
+cards do we have to draw to get four of a kind?
+</code></pre><p>The post goes into details about <a href="https://observablehq.com/@dmaynard/tickler-puzzle-four-of-a-kind">how to use simulation in Observable</a> to solve the third question. A <a href="https://en.wikipedia.org/wiki/Closed-form_expression">closed-form solution</a> isn&rsquo;t given and I thought it looked like a good way to brush away some probability cobwebs.</p>
+<h2 id="first-and-second-questions">First and Second Questions</h2>
+<p>David S Maynard says the first two questions are easy and he&rsquo;s right. If you draw 40 or more cards from the deck and try to arrange them in 13 &ldquo;buckets&rdquo; by rank, then at least one bucket will have at least four cards. If you draw 39 cards, then the buckets can be filled with three cards each (three-of-a-kinds) without resulting in a four-of-a-kind. Therefore,
+to guarantee that you get a four-of-a-kind, draw 40 cards.</p>
+<p>Note that the solution is independent of the construction of the deck of cards (so long as it has at least 40 cards). In particular, the solution applies to drawing from a single deck or a double deck.</p>
+<h2 id="third-question">Third Question</h2>
+<p>Here&rsquo;s my attempt at a closed-form solution. Let&rsquo;s remind ourselves of the probability basics (I need probability formality to keep things sane in my head: probability is counter-intuitive, at least to me).</p>
+<p><img src="/images/fourok/prob-space.svg#center" alt="probability space for standard deck of cards"></p>
+<p>To model counting the number of draws, I introduce a <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a> and calculate its <a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a>.</p>
+<p><img src="/images/fourok/soln.svg#center" alt="solution"></p>
+<p><img src="/images/fourok/symmetry.svg#center" alt="symmetry"></p>
+<p><img src="/images/fourok/hypergeometric.svg#center" alt="hypergeometric"></p>
+<p>I&rsquo;ll show below that the answer is 68719476736/2748462675 (25.002877921927755).</p>
+<h2 id="implementation-in-golang">Implementation in Golang</h2>
+<p>The <a href="https://play.golang.org/p/ZeYQwya_VLr">following golang program</a> evaluates the close form solution (exactly as a fraction) and approximates the solution with a Monte Carlo experiment.</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;math&#34;</span>
+	<span class="s">&#34;math/big&#34;</span>
+	<span class="s">&#34;math/rand&#34;</span>
+	<span class="s">&#34;runtime&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">mul</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="o">&amp;</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">{}).</span><span class="nf">Mul</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">binomial</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span> <span class="nx">m</span> <span class="kt">int64</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="nx">m</span> <span class="p">&gt;</span> <span class="nx">n</span> <span class="o">||</span> <span class="nx">n</span> <span class="p">&lt;</span> <span class="mi">0</span> <span class="o">||</span> <span class="nx">m</span> <span class="p">&lt;</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">big</span><span class="p">.</span><span class="nf">NewInt</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="k">if</span> <span class="nx">n</span> <span class="o">==</span> <span class="nx">m</span> <span class="p">{</span>
+		<span class="k">return</span> <span class="nx">big</span><span class="p">.</span><span class="nf">NewInt</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="p">(</span><span class="o">&amp;</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">{}).</span><span class="nf">Binomial</span><span class="p">(</span><span class="nx">n</span><span class="p">,</span> <span class="nx">m</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">choices</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int64</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nf">binomial</span><span class="p">(</span><span class="mi">13</span><span class="p">,</span> <span class="nx">i</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">add</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="o">&amp;</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">{}).</span><span class="nf">Add</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">fraction</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Rat</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="o">&amp;</span><span class="nx">big</span><span class="p">.</span><span class="nx">Rat</span><span class="p">{}).</span><span class="nf">SetFrac</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">sign</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int64</span><span class="p">)</span> <span class="o">*</span><span class="nx">big</span><span class="p">.</span><span class="nx">Int</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nx">big</span><span class="p">.</span><span class="nf">NewInt</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="p">(</span><span class="nx">i</span><span class="o">%</span><span class="mi">2</span><span class="p">))</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">estimate</span><span class="p">(</span><span class="nx">samples</span><span class="p">,</span> <span class="nx">channels</span> <span class="kt">int</span><span class="p">)</span> <span class="kt">float64</span> <span class="p">{</span>
+
+	<span class="kd">type</span> <span class="nx">card</span> <span class="kd">struct</span> <span class="p">{</span>
+		<span class="nx">suit</span><span class="p">,</span> <span class="nx">rank</span> <span class="kt">int</span>
+	<span class="p">}</span>
+
+	<span class="nx">histogram</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="kt">int</span><span class="p">,</span> <span class="mi">52</span><span class="p">)</span>
+
+	<span class="nx">draw</span> <span class="o">:=</span> <span class="kd">func</span><span class="p">(</span><span class="nx">pack</span> <span class="p">[]</span><span class="nx">card</span><span class="p">)</span> <span class="kt">int</span> <span class="p">{</span>
+		<span class="nx">set</span> <span class="o">:=</span> <span class="kd">map</span><span class="p">[</span><span class="kt">int</span><span class="p">]</span><span class="kt">int</span><span class="p">{}</span>
+		<span class="k">for</span> <span class="nx">n</span><span class="p">,</span> <span class="nx">card</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pack</span> <span class="p">{</span>
+			<span class="nx">set</span><span class="p">[</span><span class="nx">card</span><span class="p">.</span><span class="nx">rank</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+			<span class="k">if</span> <span class="nx">set</span><span class="p">[</span><span class="nx">card</span><span class="p">.</span><span class="nx">rank</span><span class="p">]</span> <span class="o">==</span> <span class="mi">4</span> <span class="p">{</span>
+				<span class="k">return</span> <span class="nx">n</span>
+			<span class="p">}</span>
+		<span class="p">}</span>
+		<span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="nx">pack</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">results</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">chan</span> <span class="kt">int</span><span class="p">)</span>
+
+	<span class="nx">rand</span><span class="p">.</span><span class="nf">Seed</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nf">Now</span><span class="p">().</span><span class="nf">UnixNano</span><span class="p">())</span>
+	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="nx">channels</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="k">go</span> <span class="kd">func</span><span class="p">(</span><span class="nx">i</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
+			<span class="nx">r</span> <span class="o">:=</span> <span class="nx">rand</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="nx">rand</span><span class="p">.</span><span class="nf">NewSource</span><span class="p">(</span><span class="nb">int64</span><span class="p">(</span><span class="nx">i</span><span class="p">)</span> <span class="o">+</span> <span class="nx">time</span><span class="p">.</span><span class="nf">Now</span><span class="p">().</span><span class="nf">UnixNano</span><span class="p">()))</span>
+			<span class="nx">pack</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">([]</span><span class="nx">card</span><span class="p">,</span> <span class="mi">52</span><span class="p">)</span>
+
+			<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="nx">pack</span><span class="p">);</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+				<span class="nx">pack</span><span class="p">[</span><span class="nx">i</span><span class="p">]</span> <span class="p">=</span> <span class="nx">card</span><span class="p">{</span>
+					<span class="nx">suit</span><span class="p">:</span> <span class="nx">i</span> <span class="o">%</span> <span class="mi">4</span><span class="p">,</span>
+					<span class="nx">rank</span><span class="p">:</span> <span class="p">(</span><span class="nx">i</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span> <span class="o">%</span> <span class="mi">13</span><span class="p">,</span>
+				<span class="p">}</span>
+			<span class="p">}</span>
+			<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="nx">samples</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+				<span class="nx">r</span><span class="p">.</span><span class="nf">Shuffle</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">pack</span><span class="p">),</span> <span class="kd">func</span><span class="p">(</span><span class="nx">i</span><span class="p">,</span> <span class="nx">j</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span> <span class="nx">pack</span><span class="p">[</span><span class="nx">i</span><span class="p">],</span> <span class="nx">pack</span><span class="p">[</span><span class="nx">j</span><span class="p">]</span> <span class="p">=</span> <span class="nx">pack</span><span class="p">[</span><span class="nx">j</span><span class="p">],</span> <span class="nx">pack</span><span class="p">[</span><span class="nx">i</span><span class="p">]</span> <span class="p">})</span>
+				<span class="nx">results</span> <span class="o">&lt;-</span> <span class="nf">draw</span><span class="p">(</span><span class="nx">pack</span><span class="p">)</span>
+			<span class="p">}</span>
+		<span class="p">}(</span><span class="nx">i</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">i</span> <span class="p">&lt;</span> <span class="nx">channels</span><span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="k">for</span> <span class="nx">j</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="nx">j</span> <span class="p">&lt;</span> <span class="nx">samples</span><span class="p">;</span> <span class="nx">j</span><span class="o">++</span> <span class="p">{</span>
+			<span class="nx">n</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">results</span>
+			<span class="nx">histogram</span><span class="p">[</span><span class="nx">n</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+
+	<span class="nx">sum</span> <span class="o">:=</span> <span class="mi">0</span>
+	<span class="k">for</span> <span class="nx">k</span><span class="p">,</span> <span class="nx">v</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">histogram</span> <span class="p">{</span>
+		<span class="nx">sum</span> <span class="o">+=</span> <span class="p">(</span><span class="nx">k</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="nx">v</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="nb">float64</span><span class="p">(</span><span class="nx">sum</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="nb">float64</span><span class="p">(</span><span class="nx">samples</span><span class="p">)</span> <span class="o">*</span> <span class="nb">float64</span><span class="p">(</span><span class="nx">channels</span><span class="p">))</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="kd">const</span> <span class="p">(</span>
+		<span class="nx">maxDraws</span>          <span class="kt">int64</span> <span class="p">=</span> <span class="mi">40</span>
+		<span class="nx">samplesPerChannel</span>       <span class="p">=</span> <span class="mi">100000</span>
+	<span class="p">)</span>
+
+	<span class="nx">channels</span> <span class="o">:=</span> <span class="nx">runtime</span><span class="p">.</span><span class="nf">NumCPU</span><span class="p">()</span>
+
+	<span class="nx">expectation</span> <span class="o">:=</span> <span class="nx">big</span><span class="p">.</span><span class="nf">NewRat</span><span class="p">(</span><span class="nx">maxDraws</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+	<span class="k">for</span> <span class="nx">n</span> <span class="o">:=</span> <span class="nb">int64</span><span class="p">(</span><span class="mi">4</span><span class="p">);</span> <span class="nx">n</span> <span class="p">&lt;</span> <span class="nx">maxDraws</span><span class="p">;</span> <span class="nx">n</span><span class="o">++</span> <span class="p">{</span>
+		<span class="nx">sum</span> <span class="o">:=</span> <span class="nx">big</span><span class="p">.</span><span class="nf">NewInt</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+		<span class="k">for</span> <span class="nx">m</span> <span class="o">:=</span> <span class="nb">int64</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span> <span class="nx">m</span> <span class="o">&lt;=</span> <span class="mi">13</span><span class="p">;</span> <span class="nx">m</span><span class="o">++</span> <span class="p">{</span>
+			<span class="nx">tmp</span> <span class="o">:=</span> <span class="nf">mul</span><span class="p">(</span><span class="nf">mul</span><span class="p">(</span><span class="nf">sign</span><span class="p">(</span><span class="nx">m</span><span class="p">),</span> <span class="nf">choices</span><span class="p">(</span><span class="nx">m</span><span class="p">)),</span> <span class="nf">binomial</span><span class="p">(</span><span class="mi">52</span><span class="o">-</span><span class="mi">4</span><span class="o">*</span><span class="nx">m</span><span class="p">,</span> <span class="nx">n</span><span class="o">-</span><span class="mi">4</span><span class="o">*</span><span class="nx">m</span><span class="p">))</span>
+			<span class="nx">sum</span> <span class="p">=</span> <span class="nf">add</span><span class="p">(</span><span class="nx">sum</span><span class="p">,</span> <span class="nx">tmp</span><span class="p">)</span>
+		<span class="p">}</span>
+		<span class="nx">expectation</span><span class="p">.</span><span class="nf">Sub</span><span class="p">(</span><span class="nx">expectation</span><span class="p">,</span> <span class="nf">fraction</span><span class="p">(</span><span class="nx">sum</span><span class="p">,</span> <span class="nf">binomial</span><span class="p">(</span><span class="mi">52</span><span class="p">,</span> <span class="nx">n</span><span class="p">)))</span>
+	<span class="p">}</span>
+
+	<span class="nx">expectationFloat</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">expectation</span><span class="p">.</span><span class="nf">Float64</span><span class="p">()</span>
+
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Expectation = %v (%v)\n&#34;</span><span class="p">,</span> <span class="nx">expectation</span><span class="p">,</span> <span class="nx">expectationFloat</span><span class="p">)</span>
+	<span class="nx">approximation</span> <span class="o">:=</span> <span class="nf">estimate</span><span class="p">(</span><span class="nx">samplesPerChannel</span><span class="p">,</span> <span class="nx">channels</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;Approximation for %d samples = %v (error = %v)\n&#34;</span><span class="p">,</span> <span class="nx">samplesPerChannel</span><span class="o">*</span><span class="nx">channels</span><span class="p">,</span> <span class="nx">approximation</span><span class="p">,</span> <span class="nx">math</span><span class="p">.</span><span class="nf">Abs</span><span class="p">(</span><span class="nx">expectationFloat</span><span class="o">-</span><span class="nx">approximation</span><span class="p">))</span>
+<span class="p">}</span>
+</code></pre></div><p>An example run:</p>
+<pre><code>Expectation = 68719476736/2748462675 (25.002877921927755)
+Approximation for 100000 samples = 25.02365 (error = 0.020772078072244682)
+</code></pre><p>Some things to note:</p>
+<ul>
+<li>it&rsquo;s necessary to use big.Rat and big.Int as these numbers will overflow built in types</li>
+<li>the inner sum of the expectation calculation runs from 4 to 40 (a minor optimisation) because
+<ul>
+<li>you can&rsquo;t have a four-of-a-kind with less than four cards</li>
+<li><a href="#first-and-second-questions">P(X &lt;= n) = 1 for n &gt;= 40</a></li>
+</ul>
+</li>
+<li>the sum is subtracted from 40 (see <a href="#first-and-second-questions">above for why</a>)</li>
+</ul>
+<h2 id="wolfram-alpha-is-pretty-amazing">Wolfram Alpha is Pretty Amazing</h2>
+<p><img src="/images/fourok/wolfram.png#center" alt="Wolfram Alpha Solution"></p>
+
+
+    <h2>2020-29-01
+    CV
+    </h2>
+    <p>See my <a href="https://www.linkedin.com/in/steven-james-johnstone/">LinkedIn</a> profile for chronological details.</p>
+<p>I am/have been</p>
+<ul>
+<li>a <a href="https://www.gla.ac.uk/research/az/cmals/">mathematician</a></li>
+<li>a <a href="https://en.wikipedia.org/wiki/Codian">Codian</a>, <a href="https://en.wikipedia.org/wiki/Tandberg">Tandberg</a>, <a href="https://cisco.com">Cisco</a>, <a href="https://www.acano.com/">Acano</a> and <a href="https://jazznetworks.com">Jazz Networks</a> alum</li>
+<li>an automation engineer, embedded systems engineer, security specialist, <a href="https://en.wikipedia.org/wiki/Chief_security_officer">CSO</a>.</li>
+</ul>
+<p>Apart from brief periods after acquisition, my entire professional life has been in startups. I&rsquo;ve done a wide variety of things to build these companies:</p>
+<ul>
+<li>automated production line tests</li>
+<li>wrote processor bootstrap code for embedded systems</li>
+<li>ported operating systems</li>
+<li>rolled custom linux distributions</li>
+<li>wrote kernel drivers</li>
+<li>tinkered with FPGAs</li>
+<li>optimised network stacks</li>
+<li>created and ran build systems</li>
+<li>tracked down silicon bugs</li>
+<li>hunted security flaws</li>
+<li>built auth systems</li>
+<li>ran <a href="https://www.first.org/education/FIRST_PSIRT_Service_Framework_v1.0">PSIRTs</a></li>
+<li>implemented ISO 27001</li>
+<li>navigated the US Federal government certification processes (JITC etc)</li>
+</ul>
+<p>I know how to program in</p>
+<ul>
+<li>Golang</li>
+<li>C</li>
+<li>C++</li>
+<li>x86-64 assembler</li>
+<li>Ruby</li>
+</ul>
+
+
+    <h2>2020-28-01
+    Golang: Panicking Safely
+    </h2>
+    <p>Golang code can panic, causing availability issues, maybe even a denial of service vector.
+Compared to C and C++, it&rsquo;s pretty innocuous. Still, denial of service is a serious issue: why not just use <code>recover</code> in all goroutines
+and keep the show on the road?</p>
+<h1 id="an-example">An Example</h1>
+<p>Consider the following code:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// buggy reads data from input 16 bytes at a time, munges it and then writes it to output
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">buggy</span><span class="p">(</span><span class="nx">input</span><span class="p">,</span> <span class="nx">output</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="nx">in</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="nx">err</span>
+    <span class="p">}</span>
+    <span class="k">defer</span> <span class="nx">in</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span> <span class="c1">// okay to ignore errors
+</span><span class="c1"></span>
+    <span class="nx">out</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Create</span><span class="p">(</span><span class="nx">output</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="nx">err</span>
+    <span class="p">}</span>
+
+    <span class="kd">var</span> <span class="nx">buf</span> <span class="p">[</span><span class="mi">16</span><span class="p">]</span><span class="kt">byte</span>
+
+    <span class="k">for</span> <span class="p">{</span>
+        <span class="nx">_</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">io</span><span class="p">.</span><span class="nf">ReadFull</span><span class="p">(</span><span class="nx">in</span><span class="p">,</span> <span class="nx">buf</span><span class="p">[:])</span>
+        <span class="k">if</span> <span class="nx">err</span> <span class="o">==</span> <span class="nx">io</span><span class="p">.</span><span class="nx">EOF</span> <span class="p">{</span>
+            <span class="k">break</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+            <span class="nx">_</span> <span class="p">=</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+            <span class="k">return</span> <span class="nx">err</span>
+        <span class="p">}</span>
+
+        <span class="nf">bufferMunger</span><span class="p">(</span><span class="nx">buf</span><span class="p">[:])</span>
+
+        <span class="k">if</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Write</span><span class="p">(</span><span class="nx">buf</span><span class="p">[:]);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+            <span class="nx">_</span> <span class="p">=</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+            <span class="k">return</span> <span class="nx">err</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="c1">// Avoids a common bug where files which are written to
+</span><span class="c1"></span>    <span class="c1">// are closed without checking the error...with async IO
+</span><span class="c1"></span>    <span class="c1">// the Close() could result in data actually making it to
+</span><span class="c1"></span>    <span class="c1">// disk which can error
+</span><span class="c1"></span>    <span class="k">return</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><p>Now, suppose that this is called in a program which <em>recovers all panics and keeps rolling on</em>. If <code>bufferMunger</code> panics,
+then (at least temporarily), <code>buggy</code> will leak a file descriptor for
+<code>out</code>, as explained in an <a href="/posts/file-descriptor-go/">earlier post</a>. With a little imagination, these scenarious can be extended to leaks of</p>
+<ul>
+<li>database connections</li>
+<li>database transactions</li>
+<li>customer reservations</li>
+</ul>
+<p>etc.</p>
+<p>It could be argued that it&rsquo;d be better if the program failed hard rather than continuing on in some broken way. Nevertheless, a large chunk of Go code in the wild does keep rolling on
+because it <em>runs inside an HTTP handler</em>. It may surprise some that <strong>net/http will recover from panics in HTTP handlers</strong>.</p>
+<h1 id="http-handlers">HTTP Handlers</h1>
+<p>When writing HTTP handlers, we have a couple of strategies for avoiding strange <em>resource exhaustion</em> bugs caused by
+panics:</p>
+<ol>
+<li>make sure all code is &ldquo;panic safe&rdquo; (can be recovered)</li>
+<li>configure http middleware to turn a panic into an exit</li>
+</ol>
+<h2 id="panic-safety">Panic Safety</h2>
+<p>Let&rsquo;s make <code>buggy</code> &ldquo;panic safe&rdquo;. For the sake of argument, suppose that <code>bufferMunger</code> doesn&rsquo;t
+leak resources when it panics. If it can, it needs modifications too.</p>
+<h3 id="using-defer">Using defer</h3>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="c1">// buggy reads data from input 16 bytes at a time, munges it and then writes it to output
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">buggy</span><span class="p">(</span><span class="nx">input</span><span class="p">,</span> <span class="nx">output</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="nx">in</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">input</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="nx">err</span>
+    <span class="p">}</span>
+    <span class="k">defer</span> <span class="nx">in</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span> <span class="c1">// okay to ignore errors
+</span><span class="c1"></span>
+
+    <span class="nx">out</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Create</span><span class="p">(</span><span class="nx">output</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="nx">err</span>
+    <span class="p">}</span>
+
+<span class="hl">    <span class="nx">outClosed</span> <span class="o">:=</span> <span class="kc">false</span>
+</span><span class="hl">    <span class="k">defer</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+</span><span class="hl">        <span class="k">if</span> <span class="p">!</span><span class="nx">outClosed</span> <span class="p">{</span>
+</span><span class="hl">            <span class="nx">_</span> <span class="p">=</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+</span><span class="hl">        <span class="p">}</span>
+</span><span class="hl">    <span class="p">}()</span>
+</span>
+    <span class="kd">var</span> <span class="nx">buf</span> <span class="p">[</span><span class="mi">16</span><span class="p">]</span><span class="kt">byte</span>
+
+    <span class="k">for</span> <span class="p">{</span>
+        <span class="nx">_</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">io</span><span class="p">.</span><span class="nf">ReadFull</span><span class="p">(</span><span class="nx">in</span><span class="p">,</span> <span class="nx">buf</span><span class="p">[:])</span>
+        <span class="k">if</span> <span class="nx">err</span> <span class="o">==</span> <span class="nx">io</span><span class="p">.</span><span class="nx">EOF</span> <span class="p">{</span>
+            <span class="k">break</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+            <span class="k">return</span> <span class="nx">err</span>
+        <span class="p">}</span>
+
+        <span class="nf">bufferMunger</span><span class="p">(</span><span class="nx">buf</span><span class="p">[:])</span>
+
+        <span class="k">if</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Write</span><span class="p">(</span><span class="nx">buf</span><span class="p">[:]);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+            <span class="k">return</span> <span class="nx">err</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="c1">// Avoids a common bug where files which are written to
+</span><span class="c1"></span>    <span class="c1">// are closed without checking the error...with async IO
+</span><span class="c1"></span>    <span class="c1">// the Close() could result in data actually making it to
+</span><span class="c1"></span>    <span class="c1">// disk which can error
+</span><span class="hl"><span class="c1"></span>    <span class="nx">outClosed</span> <span class="p">=</span> <span class="kc">true</span>
+</span>    <span class="k">return</span> <span class="nx">out</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><p>Here, <code>out</code> will be closed in a defered function. Note how I avoid closing <code>out</code> twice.</p>
+<h3 id="using-recover">Using recover</h3>
+<p>A simple mechanism would be to wrap bufferMunger so it returns an error rather than causing a panic. For example,</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">bufferMungerWrapper</span><span class="p">(</span><span class="nx">buf</span> <span class="p">[]</span><span class="kt">byte</span><span class="p">)</span> <span class="p">(</span><span class="nx">err</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">defer</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="nx">r</span> <span class="o">:=</span> <span class="nb">recover</span><span class="p">();</span> <span class="nx">r</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+            <span class="k">switch</span> <span class="nx">x</span> <span class="o">:=</span> <span class="nx">r</span><span class="p">.(</span><span class="kd">type</span><span class="p">)</span> <span class="p">{</span>
+            <span class="k">case</span> <span class="kt">string</span><span class="p">:</span>
+                <span class="nx">err</span> <span class="p">=</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="nx">x</span><span class="p">)</span>
+            <span class="k">case</span> <span class="kt">error</span><span class="p">:</span>
+                <span class="nx">err</span> <span class="p">=</span> <span class="nx">x</span>
+            <span class="k">default</span><span class="p">:</span>
+                <span class="nx">err</span> <span class="p">=</span> <span class="nx">errors</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="s">&#34;unknown panic&#34;</span><span class="p">)</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+    <span class="p">}()</span>
+
+    <span class="nf">bufferMunger</span><span class="p">(</span><span class="nx">buf</span><span class="p">)</span>
+    <span class="k">return</span> <span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div><h2 id="middleware">Middleware</h2>
+<p>If a quick and obvious failure after a panic is preferred to a potentially hard-to-debug resource exhaustion (hint: it is), then wrapping a handler which causes
+the program to exit is a good strategy:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">NewPanicHandler</span><span class="p">(</span><span class="nx">h</span> <span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="p">)</span> <span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="nx">http</span><span class="p">.</span><span class="nf">HandlerFunc</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">w</span> <span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span> <span class="nx">r</span> <span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">defer</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+			<span class="k">if</span> <span class="nx">r</span> <span class="o">:=</span> <span class="nb">recover</span><span class="p">();</span> <span class="nx">r</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="c1">// log.Fatalf causes the program to exit
+</span><span class="c1"></span>				<span class="nx">log</span><span class="p">.</span><span class="nf">Fatalf</span><span class="p">(</span><span class="s">&#34;%s&#34;</span><span class="p">,</span> <span class="nx">debug</span><span class="p">.</span><span class="nf">Stack</span><span class="p">())</span>
+			<span class="p">}</span>
+		<span class="p">}()</span>
+		<span class="nx">h</span><span class="p">.</span><span class="nf">ServeHTTP</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span> <span class="nx">r</span><span class="p">)</span>
+	<span class="p">})</span>
+<span class="p">}</span>
+</code></pre></div><h1 id="conclusion">Conclusion</h1>
+<p>Using <code>recover</code> isn&rsquo;t a silver bullet. My 2¢: let panic cause a program exit. Fix logic bugs. Find them with fuzzing.</p>
+
+
+    <h2>2019-12-01
+    xchg rax,rax
+    </h2>
+    <h1 id="x86-64-kata">x86-64 Kata</h1>
+<p>The book <a href="https://www.amazon.co.uk/xchg-rax-xorpd/dp/1502958082">xchg rax,rax</a> (<a href="https://www.xorpd.net/pages/xchg_rax/snip_00.html">content available free here</a>) is
+a collection of 0x40 x86-64 snippets. It has no text other
+than chunks of assembly language. You read the code and ponder
+its meaning. <a href="https://en.wikipedia.org/wiki/Kata">Kata</a> for the budding reverse engineer.</p>
+<h1 id="spoiler-alert">Spoiler Alert</h1>
+<p>Program 0x03 is pretty neat:</p>
+<div class="highlight"><pre class="chroma"><code class="language-asm" data-lang="asm"><span class="nf">sub</span> <span class="no">rdx</span><span class="p">,</span><span class="no">rax</span>
+<span class="nf">sbb</span> <span class="no">rcx</span><span class="p">,</span><span class="no">rcx</span>
+<span class="nf">and</span> <span class="no">rcx</span><span class="p">,</span><span class="no">rdx</span>
+<span class="nf">add</span> <span class="no">rax</span><span class="p">,</span><span class="no">rcx</span>
+</code></pre></div><p>Let me spoil this for you: at the end of this program, rax will contain
+the smaller of the original rax and rdx values. I know this from reading
+it. What if I couldn&rsquo;t work out what this did? What tools could I use?</p>
+<h1 id="assemble-it">Assemble It</h1>
+<p>We can embed the snippet in a C program and run it for some test cases:</p>
+<div class="highlight"><pre class="chroma"><code class="language-C" data-lang="C"><span class="cp">#include</span> <span class="cpf">&lt;stdio.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">x3</span><span class="p">(</span><span class="kt">int</span> <span class="n">a</span><span class="p">,</span> <span class="kt">int</span> <span class="n">b</span><span class="p">)</span> <span class="p">{</span>
+
+    <span class="kt">int</span> <span class="n">out</span><span class="p">;</span>
+    <span class="k">asm</span><span class="p">(</span>
+        <span class="c1">// it&#39;s not stated in xchg rax,rax but it&#39;s
+</span><span class="c1"></span>        <span class="c1">// intel syntax. Note the noprefix means we
+</span><span class="c1"></span>        <span class="c1">// don&#39;t need % before registers
+</span><span class="c1"></span>        <span class="s">&#34;.intel_syntax noprefix;&#34;</span>
+        <span class="c1">// a bit of preamble to get registers
+</span><span class="c1"></span>        <span class="c1">// set up correctly. We&#39;re okay with just working
+</span><span class="c1"></span>        <span class="c1">// with int rather than long int
+</span><span class="c1"></span>        <span class="s">&#34;mov eax, %1;&#34;</span>
+        <span class="s">&#34;mov edx, %2;&#34;</span>
+
+        <span class="c1">// 0x03 code below
+</span><span class="c1"></span>        <span class="s">&#34;sub rdx, rax;&#34;</span>
+        <span class="s">&#34;sbb rcx,rcx;&#34;</span>
+        <span class="s">&#34;and rcx,rdx;&#34;</span>
+        <span class="s">&#34;add rax,rcx;&#34;</span>
+
+        <span class="c1">// put the result into out
+</span><span class="c1"></span>        <span class="s">&#34;mov %0, eax;&#34;</span>
+        <span class="c1">// tell the compiler that out is in memory
+</span><span class="c1"></span>        <span class="o">:</span> <span class="s">&#34;=m&#34;</span> <span class="p">(</span><span class="n">out</span><span class="p">)</span>
+        <span class="c1">// tell the compiler that a and b are inputs
+</span><span class="c1"></span>        <span class="o">:</span> <span class="s">&#34;m&#34;</span> <span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="p">,</span> <span class="s">&#34;m&#34;</span> <span class="p">(</span><span class="n">b</span><span class="p">)</span>
+        <span class="c1">// this is the list of registers which are clobbered
+</span><span class="c1"></span>        <span class="o">:</span> <span class="s">&#34;rax&#34;</span><span class="p">,</span><span class="s">&#34;rdx&#34;</span><span class="p">,</span><span class="s">&#34;rcx&#34;</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">out</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">struct</span> <span class="n">input</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">a</span><span class="p">;</span>
+    <span class="kt">int</span> <span class="n">b</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+
+
+    <span class="k">struct</span> <span class="n">input</span> <span class="n">inputs</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="p">{</span><span class="mh">0x0</span><span class="p">,</span> <span class="mh">0x1</span><span class="p">},</span>
+        <span class="p">{</span><span class="mh">0x1</span><span class="p">,</span> <span class="mh">0x1</span><span class="p">},</span>
+        <span class="p">{</span><span class="mh">0xf</span><span class="p">,</span> <span class="mh">0xe</span><span class="p">},</span>
+        <span class="p">{</span><span class="mh">0xe</span><span class="p">,</span> <span class="mh">0xf</span><span class="p">},</span>
+        <span class="p">{</span><span class="o">~</span><span class="mi">0</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">},</span>
+    <span class="p">};</span>
+
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="n">inputs</span><span class="p">[</span><span class="mi">0</span><span class="p">]);</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;%d (rax: %016x rdx %016x) -&gt;  rax: %016x</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span>
+                <span class="n">i</span><span class="p">,</span> <span class="n">inputs</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">a</span><span class="p">,</span> <span class="n">inputs</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">b</span><span class="p">,</span> <span class="n">x3</span><span class="p">(</span><span class="n">inputs</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">a</span><span class="p">,</span> <span class="n">inputs</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">b</span><span class="p">));</span>
+    <span class="p">}</span>
+   <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>Compile with</p>
+<pre><code>gcc -masm=intel 0x3.c
+</code></pre><p>and run to get</p>
+<pre><code>0 (rax: 0000000000000000 rdx 0000000000000001) -&gt;  rax: 0000000000000000
+1 (rax: 0000000000000001 rdx 0000000000000001) -&gt;  rax: 0000000000000001
+2 (rax: 000000000000000f rdx 000000000000000e) -&gt;  rax: 000000000000000e
+3 (rax: 000000000000000e rdx 000000000000000f) -&gt;  rax: 000000000000000e
+4 (rax: 00000000ffffffff rdx 0000000000000000) -&gt;  rax: 0000000000000000
+</code></pre><h1 id="emulation">Emulation</h1>
+<p>Suppose that we aren&rsquo;t running on the target system (something without an
+x86-64 processor) or we&rsquo;re concerned about the code being malware (when we start
+to look at more complex code). Then actually running the code natively isn&rsquo;t an
+option.</p>
+<p>Emulation allows us to run the code while keeping our tinfoil helmets on. Here&rsquo;s a
+program I wrote in Golang which</p>
+<ul>
+<li>assembles <a href="https://www.xorpd.net/pages/xchg_rax/snip_03.html">0x03</a> into machine code using <a href="http://www.keystone-engine.org/">keystone</a></li>
+<li>sets up the <a href="https://www.unicorn-engine.org/">unicorn</a> emulator to run the machine code</li>
+<li>passes in a few pairs of register values and prints the value of rax at the end</li>
+</ul>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+
+	<span class="c1">// a branch of keystone golang bindings which builds on linux
+</span><span class="c1"></span>	<span class="s">&#34;github.com/stevenjohnstone/keystone/bindings/go/keystone&#34;</span>
+	<span class="nx">uc</span> <span class="s">&#34;github.com/unicorn-engine/unicorn/bindings/go/unicorn&#34;</span>
+<span class="p">)</span>
+
+<span class="c1">// This program explores a few inputs to
+</span><span class="c1">// problem 0x03 of xchg rax,rax:
+</span><span class="c1">// https://www.xorpd.net/pages/xchg_rax/snip_03.html
+</span><span class="c1">//
+</span><span class="c1">// This is a good excuse to give keystone and unicorn
+</span><span class="c1">// a spin in golang
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+
+	<span class="c1">// first, convert the assembly language into numerical opcodes
+</span><span class="c1"></span>	<span class="c1">// (machine language)
+</span><span class="c1"></span>	<span class="nx">assembly</span> <span class="o">:=</span> <span class="s">&#34;sub rdx,rax; sbb rcx,rcx; and rcx,rdx; add rax,rcx&#34;</span>
+
+	<span class="nx">ks</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">keystone</span><span class="p">.</span><span class="nf">New</span><span class="p">(</span><span class="nx">keystone</span><span class="p">.</span><span class="nx">ARCH_X86</span><span class="p">,</span> <span class="nx">keystone</span><span class="p">.</span><span class="nx">MODE_64</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">defer</span> <span class="nx">ks</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+
+	<span class="nx">err</span> <span class="p">=</span> <span class="nx">ks</span><span class="p">.</span><span class="nf">Option</span><span class="p">(</span><span class="nx">keystone</span><span class="p">.</span><span class="nx">OPT_SYNTAX</span><span class="p">,</span> <span class="nx">keystone</span><span class="p">.</span><span class="nx">OPT_SYNTAX_INTEL</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">insn</span><span class="p">,</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">ok</span> <span class="o">:=</span> <span class="nx">ks</span><span class="p">.</span><span class="nf">Assemble</span><span class="p">(</span><span class="nx">assembly</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">!</span><span class="nx">ok</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="s">&#34;failed to assemble&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">// choose some initial values for rax and rdx
+</span><span class="c1"></span>	<span class="c1">// to get a feel for what the algorithm does
+</span><span class="c1"></span>	<span class="nx">regPairs</span> <span class="o">:=</span> <span class="p">[]</span><span class="kd">struct</span> <span class="p">{</span>
+		<span class="nx">rax</span><span class="p">,</span> <span class="nx">rdx</span> <span class="kt">uint64</span>
+	<span class="p">}{</span>
+		<span class="p">{</span><span class="mh">0x0</span><span class="p">,</span> <span class="mh">0x1</span><span class="p">},</span>
+		<span class="p">{</span><span class="mh">0x1</span><span class="p">,</span> <span class="mh">0x1</span><span class="p">},</span>
+		<span class="p">{</span><span class="mh">0xf</span><span class="p">,</span> <span class="mh">0xe</span><span class="p">},</span>
+		<span class="p">{</span><span class="mh">0xe</span><span class="p">,</span> <span class="mh">0xf</span><span class="p">},</span>
+		<span class="p">{</span><span class="mh">0xffffffff</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">},</span>
+	<span class="p">}</span>
+
+	<span class="c1">// try each pair of initial register values with the emulator
+</span><span class="c1"></span>	<span class="k">for</span> <span class="nx">i</span><span class="p">,</span> <span class="nx">regPair</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">regPairs</span> <span class="p">{</span>
+		<span class="nx">mu</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">uc</span><span class="p">.</span><span class="nf">NewUnicorn</span><span class="p">(</span><span class="nx">uc</span><span class="p">.</span><span class="nx">ARCH_X86</span><span class="p">,</span> <span class="nx">uc</span><span class="p">.</span><span class="nx">MODE_64</span><span class="p">)</span>
+		<span class="nx">mu</span><span class="p">.</span><span class="nf">MemMap</span><span class="p">(</span><span class="mh">0x1000</span><span class="p">,</span> <span class="mh">0x1000</span><span class="p">)</span>
+		<span class="nx">mu</span><span class="p">.</span><span class="nf">MemWrite</span><span class="p">(</span><span class="mh">0x1000</span><span class="p">,</span> <span class="nx">insn</span><span class="p">)</span>
+
+		<span class="nx">mu</span><span class="p">.</span><span class="nf">RegWrite</span><span class="p">(</span><span class="nx">uc</span><span class="p">.</span><span class="nx">X86_REG_RAX</span><span class="p">,</span> <span class="nx">regPair</span><span class="p">.</span><span class="nx">rax</span><span class="p">)</span>
+		<span class="nx">mu</span><span class="p">.</span><span class="nf">RegWrite</span><span class="p">(</span><span class="nx">uc</span><span class="p">.</span><span class="nx">X86_REG_RDX</span><span class="p">,</span> <span class="nx">regPair</span><span class="p">.</span><span class="nx">rdx</span><span class="p">)</span>
+
+		<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">mu</span><span class="p">.</span><span class="nf">Start</span><span class="p">(</span><span class="mh">0x1000</span><span class="p">,</span> <span class="mh">0x1000</span><span class="o">+</span><span class="nb">uint64</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">insn</span><span class="p">)));</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+			<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+		<span class="p">}</span>
+
+		<span class="nx">endRax</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">mu</span><span class="p">.</span><span class="nf">RegRead</span><span class="p">(</span><span class="nx">uc</span><span class="p">.</span><span class="nx">X86_REG_RAX</span><span class="p">)</span>
+		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;%d (rax: %016x rdx %016x) -&gt;  rax: %016x\n&#34;</span><span class="p">,</span> <span class="nx">i</span><span class="p">,</span> <span class="nx">regPair</span><span class="p">.</span><span class="nx">rax</span><span class="p">,</span> <span class="nx">regPair</span><span class="p">.</span><span class="nx">rdx</span><span class="p">,</span> <span class="nx">endRax</span><span class="p">)</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>Here&rsquo;s the output (just as above):</p>
+<pre><code>0 (rax: 0000000000000000 rdx 0000000000000001) -&gt;  rax: 0000000000000000
+1 (rax: 0000000000000001 rdx 0000000000000001) -&gt;  rax: 0000000000000001
+2 (rax: 000000000000000f rdx 000000000000000e) -&gt;  rax: 000000000000000e
+3 (rax: 000000000000000e rdx 000000000000000f) -&gt;  rax: 000000000000000e
+4 (rax: 00000000ffffffff rdx 0000000000000000) -&gt;  rax: 0000000000000000
+</code></pre><p>It appears plausible that 0x03 gives the minimum of rax and rdx. However, this is not a proof. Let&rsquo;s take things
+further.</p>
+<h1 id="z3">Z3</h1>
+<p><a href="https://github.com/Z3Prover/z3">Z3</a>: read about it for yourself, I wouldn&rsquo;t do it justice. Suffice it to say,
+we can use SMT solvers to prove properties of software.</p>
+<p>The plan of attack is:</p>
+<ul>
+<li>turn the assembly into <a href="https://en.wikipedia.org/wiki/Static_single_assignment_form">SSA</a> form</li>
+<li>make <em>assertions</em> which model the effects of the instructions in the program</li>
+<li>show that an assertion which contradicts our <em>theorem</em> leads to the model being unsatisfiable</li>
+</ul>
+<p>I&rsquo;ve opted to use <a href="http://smtlib.cs.uiowa.edu/">SMT-LIB</a> to demonstrate.</p>
+<div class="highlight"><pre class="chroma"><code class="language-lisp" data-lang="lisp"><span class="p">(</span><span class="nv">set-logic</span> <span class="nv">QF_BV</span><span class="p">)</span>
+
+<span class="c1">; Convention here is add a label to the end of the register</span>
+<span class="c1">; to mark a step in the program for which the value applies.</span>
+<span class="c1">; e.g.</span>
+<span class="c1">; rdx0 is the first value of rdx, rdx1 is the value at the</span>
+<span class="c1">; next step of the program, rdxN is the value at the Nth</span>
+<span class="c1">; step.</span>
+<span class="c1">;</span>
+<span class="c1">; Essentially, we&#39;re turning an assembly program into SSA form</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rdx0</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rdx1</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rcx0</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rcx1</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rcx2</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rax0</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">rax3</span> <span class="p">()</span> <span class="p">(</span> <span class="nv">_</span> <span class="nv">BitVec</span> <span class="mi">64</span><span class="p">))</span>
+
+<span class="c1">; The carry flag</span>
+<span class="p">(</span><span class="nv">declare-fun</span> <span class="nv">cf</span> <span class="p">()</span> <span class="p">(</span><span class="nv">_</span> <span class="nv">Bool</span><span class="p">))</span>
+
+<span class="c1">; sub sets the carry flag if unsigned subtraction will result in</span>
+<span class="c1">; an overflow i.e. rax0 &gt; rdx0</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nf">=</span> <span class="nv">cf</span> <span class="p">(</span><span class="nv">bvult</span> <span class="nv">rdx0</span> <span class="nv">rax0</span><span class="p">)))</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nf">=</span> <span class="nv">rdx1</span> <span class="p">(</span><span class="nv">bvsub</span> <span class="nv">rdx0</span> <span class="nv">rax0</span><span class="p">)))</span>
+
+<span class="c1">; sbb is &#39;subtract with carry&#39;. If the carry flag is set, we take</span>
+<span class="c1">; away one from the result of sub</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nf">=</span> <span class="nv">rcx1</span>
+<span class="p">(</span><span class="nv">ite</span> <span class="p">(</span><span class="nf">=</span> <span class="nv">cf</span> <span class="nv">true</span><span class="p">)</span>
+ <span class="p">(</span><span class="nv">bvsub</span> <span class="p">(</span><span class="nv">bvsub</span> <span class="nv">rcx0</span> <span class="nv">rcx0</span><span class="p">)</span> <span class="mh">#x0000000000000001</span><span class="p">)</span>
+ <span class="p">(</span><span class="nv">bvsub</span> <span class="nv">rcx0</span> <span class="nv">rcx0</span><span class="p">))</span>
+<span class="p">))</span>
+
+<span class="c1">; and rxc1,rdx1</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nf">=</span> <span class="nv">rcx2</span> <span class="p">(</span><span class="nv">bvand</span> <span class="nv">rcx1</span> <span class="nv">rdx1</span><span class="p">)))</span>
+<span class="c1">; add rax0,rcv2</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nf">=</span> <span class="nv">rax3</span> <span class="p">(</span><span class="nv">bvadd</span> <span class="nv">rax0</span> <span class="nv">rcx2</span><span class="p">)))</span>
+
+<span class="c1">; assert conditions which should fail if this is indeed a minimum</span>
+<span class="c1">; function. In the case below, we assert that rax0 &lt;= rdx0 and</span>
+<span class="c1">; rax3 != rax0 (which we suspect is false) and so if we get &#39;unsat&#39;</span>
+<span class="c1">; as the result, then we&#39;ve proved rax0 &lt;= rdx0 =&gt; rax3 == rax0</span>
+
+<span class="c1">; note the use of push here. Allows us to reuse the work above by</span>
+<span class="c1">; popping the asserts below from the stack</span>
+<span class="p">(</span><span class="nb">push</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nb">or</span> <span class="p">(</span><span class="nv">bvult</span> <span class="nv">rax0</span> <span class="nv">rdx0</span><span class="p">)</span> <span class="p">(</span><span class="nf">not</span> <span class="p">(</span><span class="nv">distinct</span> <span class="nv">rax0</span> <span class="nv">rdx0</span><span class="p">))))</span>
+        <span class="p">(</span><span class="nv">check-sat</span><span class="p">)</span>
+        <span class="p">(</span><span class="nb">push</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nv">distinct</span> <span class="nv">rax3</span> <span class="nv">rax0</span><span class="p">))</span>
+            <span class="p">(</span><span class="nv">check-sat</span><span class="p">)</span>
+<span class="p">(</span><span class="nb">pop</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="c1">; We show here that rax0 &gt; rdx0 (along with our previous assertions) can</span>
+<span class="c1">; can be satisfied. We then show that adding rax3 != rdx0 leads to</span>
+<span class="c1">; unsat, which means that rax3 == rdx0</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span><span class="nv">bvugt</span> <span class="nv">rax0</span> <span class="nv">rdx0</span><span class="p">))</span>
+<span class="p">(</span><span class="nv">check-sat</span><span class="p">)</span>
+<span class="p">(</span><span class="nb">assert</span> <span class="p">(</span> <span class="nv">distinct</span> <span class="nv">rax3</span> <span class="nv">rdx0</span><span class="p">))</span>
+
+<span class="p">(</span><span class="nv">check-sat</span><span class="p">)</span>
+</code></pre></div><p>Running with z3 gives</p>
+<pre><code>sat
+unsat
+sat
+unsat
+</code></pre><h1 id="why">Why?</h1>
+<p>This is surely overkill for such a small problem? Yes. However, as we move to more complex binary executables (e.g. malware)
+the ideas touched on here come into their own.</p>
+
+
+    <h2>2017-13-10
+    SO_REUASEADDR and Golang
+    </h2>
+    <h1 id="a-flaky-test">A Flaky Test</h1>
+<p>I was investigating a test which failed with a very low probability. It boiled down to this:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;net&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">//port zero means let the OS choose a free port
+</span><span class="c1"></span>	<span class="nx">l</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">net</span><span class="p">.</span><span class="nf">Listen</span><span class="p">(</span><span class="s">&#34;tcp&#34;</span><span class="p">,</span> <span class="s">&#34;127.0.0.1:0&#34;</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">addr</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Addr</span><span class="p">().</span><span class="nf">String</span><span class="p">()</span>
+
+	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">for</span> <span class="p">{</span>
+			<span class="nx">c</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Accept</span><span class="p">()</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="k">return</span>
+			<span class="p">}</span>
+			<span class="nx">c</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+		<span class="p">}</span>
+	<span class="p">}()</span>
+
+	<span class="nx">time</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Close</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">//listen on the same port as before
+</span><span class="c1"></span>	<span class="nx">l</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">net</span><span class="p">.</span><span class="nf">Listen</span><span class="p">(</span><span class="s">&#34;tcp&#34;</span><span class="p">,</span> <span class="nx">addr</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>It&rsquo;s pretty standard to stop a goroutine which is blocked in Accept() by calling Close() on the listener. Passes casual inspection, linters don&rsquo;t complain etc. However, if you run the above enough times, you may see something like this:</p>
+<pre><code>panic: listen tcp 127.0.0.1:37327: bind: address already in use
+</code></pre><p>Address already in use? This caused me some confusion as I know that <a href="http://man7.org/linux/man-pages/man7/socket.7.html">SO_RESUSEADDR</a> is set set by Golang in net.Listen and I&rsquo;ve been conditioned to think &ldquo;SO_RESUSEADDR&rdquo; when I see EALREADY in a situation like this.</p>
+<h1 id="root-cause">Root Cause</h1>
+<p>The problem here is that Close() of a listener doesn&rsquo;t immediately close the underlying file descriptor. What it <a href="https://golang.org/src/internal/poll/fd_unix.go#L69">does</a> is decrement a reference count and if that reference count is non-zero will exit with a file descriptor still open. Subsequent calls to net.Listen may fail with &ldquo;bind: address already in use&rdquo; because the address really is in use. Not waiting on sockets to leave TIME_WAIT, just <em>open</em>.</p>
+<p>The reference count on the underlying file descriptor may be non-zero because a goroutine is still in the guts of <a href="https://golang.org/src/internal/poll/fd_unix.go#L317">Accept()</a> where it has locked the file-descriptor. This explains our intermittent failure: we call Close() and then Listen() but there&rsquo;s a goroutine still in Accept() which has prevented the underlying file-descriptor from being closed.</p>
+<h1 id="the-fix">The fix</h1>
+<p>&hellip;is to ensure that the goroutine is not in Accept() when we try to listen again on the same port. For example, we can close a channel to signal that the goroutine is done:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;net&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">//port zero means let the OS choose a free port
+</span><span class="c1"></span>	<span class="nx">l</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">net</span><span class="p">.</span><span class="nf">Listen</span><span class="p">(</span><span class="s">&#34;tcp&#34;</span><span class="p">,</span> <span class="s">&#34;127.0.0.1:0&#34;</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="nx">addr</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Addr</span><span class="p">().</span><span class="nf">String</span><span class="p">()</span>
+	<span class="nx">done</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">chan</span> <span class="kt">bool</span><span class="p">)</span>
+
+	<span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">for</span> <span class="p">{</span>
+			<span class="nx">c</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Accept</span><span class="p">()</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="nb">close</span><span class="p">(</span><span class="nx">done</span><span class="p">)</span>
+				<span class="k">return</span>
+			<span class="p">}</span>
+			<span class="nx">c</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
+		<span class="p">}</span>
+	<span class="p">}()</span>
+
+	<span class="nx">time</span><span class="p">.</span><span class="nf">Sleep</span><span class="p">(</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">l</span><span class="p">.</span><span class="nf">Close</span><span class="p">();</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">//wait for the goroutine to have left Accept()
+</span><span class="c1"></span>	<span class="o">&lt;-</span><span class="nx">done</span>
+
+	<span class="c1">//listen on the same port as before
+</span><span class="c1"></span>	<span class="nx">l</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">net</span><span class="p">.</span><span class="nf">Listen</span><span class="p">(</span><span class="s">&#34;tcp&#34;</span><span class="p">,</span> <span class="nx">addr</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><h1 id="lessons-learned">Lessons Learned</h1>
+<ul>
+<li>when Close() of a listener returns, the underlying file descriptor may still be open</li>
+<li>any method calls for the listener must complete to be sure that the underlying file descriptor is closed</li>
+</ul>
+
+
+    <h2>2017-13-10
+    Leaking File Descriptors in Go
+    </h2>
+    <h1 id="golang-file-descriptors-and-finalizers">Golang, File Descriptors and Finalizers</h1>
+<p>If you <a href="https://golang.org/pkg/os/#Open">Open()</a> a file in Golang and it goes out of scope, then it&rsquo;ll be closed the next time the garbage collector runs as there&rsquo;s a  cleanup <em>finalizer</em> set when Open() is called.</p>
+<p>You can see this in action in the following program:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;os&#34;</span>
+	<span class="s">&#34;runtime&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">func</span> <span class="nf">allocate</span><span class="p">()</span> <span class="kt">int</span> <span class="p">{</span>
+	<span class="c1">//use this file as our test subject
+</span><span class="c1"></span>	<span class="nx">_</span><span class="p">,</span> <span class="nx">sourceFile</span><span class="p">,</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">ok</span> <span class="o">:=</span> <span class="nx">runtime</span><span class="p">.</span><span class="nf">Caller</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">!</span><span class="nx">ok</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="s">&#34;source file not found&#34;</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="nx">counter</span> <span class="o">:=</span> <span class="mi">0</span>
+	<span class="kd">var</span> <span class="nx">files</span> <span class="p">[]</span><span class="o">*</span><span class="nx">os</span><span class="p">.</span><span class="nx">File</span>
+	<span class="k">for</span> <span class="p">{</span>
+		<span class="nx">f</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">os</span><span class="p">.</span><span class="nf">Open</span><span class="p">(</span><span class="nx">sourceFile</span><span class="p">)</span>
+		<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;successful opens= %d\n&#34;</span><span class="p">,</span> <span class="nx">counter</span><span class="p">)</span>
+			<span class="k">return</span> <span class="nx">counter</span>
+		<span class="p">}</span>
+		<span class="nx">counter</span><span class="o">++</span>
+		<span class="nx">files</span> <span class="p">=</span> <span class="nb">append</span><span class="p">(</span><span class="nx">files</span><span class="p">,</span> <span class="nx">f</span><span class="p">)</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="nf">allocate</span><span class="p">()</span>
+    <span class="nx">runtime</span><span class="p">.</span><span class="nf">GC</span><span class="p">()</span>
+    <span class="nf">allocate</span><span class="p">()</span>
+<span class="p">}</span>
+
+</code></pre></div><p>On my system, the output is</p>
+<pre><code>successful opens = 1020
+successful opens = 1020
+</code></pre><p>The first time allocate() is called, it manages to open the file 1020 times before returning. The call to <a href="https://golang.org/pkg/runtime/#GC">runtime.GC()</a> causes the garbage collector to run which closes the open files allowing the next allocate() to open the file 1020 times. What happens if we don&rsquo;t call the garbage collector?</p>
+<p>We modify main:</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="nf">allocate</span><span class="p">()</span>
+    <span class="nf">allocate</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div><p>The result is now:</p>
+<pre><code>successful opens = 1020
+successful opens = 0
+</code></pre><p>The garbage collector hasn&rsquo;t run by the time the second allocate() call happens so the available file descriptors for the process are exhausted. When would the garbage collector run?</p>
+<div class="highlight"><pre class="chroma"><code class="language-golang" data-lang="golang"><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nf">allocate</span><span class="p">()</span>
+	<span class="k">for</span> <span class="nx">i</span> <span class="o">:=</span> <span class="mi">0</span><span class="p">;</span> <span class="p">;</span> <span class="nx">i</span><span class="o">++</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="nf">allocate</span><span class="p">()</span> <span class="p">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;garbage collection ran after %d iterations&#34;</span><span class="p">,</span> <span class="nx">i</span><span class="p">)</span>
+			<span class="k">return</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div><p>With main as above, it takes ~30k iterations of allocate for the garbage collector to run on my system. This isn&rsquo;t too surprising. Exhaustion of file descriptors will not result in enough memory being used to trigger a garbage collection. The garbage collector is oblivious to the lack of system resources other than memory.</p>
+<h1 id="dont-rely-on-the-garbage-collector">Don&rsquo;t Rely on the Garbage Collector</h1>
+<p>&hellip;for anything other than collecting memory resources. Tying other resource types to garbage collection is a bad idea and could lead to resource exhaustion. After all, you aren&rsquo;t guaranteed to ever have the garbage collector run for your program. Close files when you&rsquo;re finished with them; defer is your friend.</p>
+
+
+    <h2>2017-07-10
+    CVE-2017-15042
+    </h2>
+    <h1 id="i-went-looking-for-a-starttlshttpsenwikipediaorgwikiopportunistic_tls-bug">I Went Looking For A <a href="https://en.wikipedia.org/wiki/Opportunistic_TLS">STARTTLS</a> Bug</h1>
+<p>I&rsquo;ve been putting together a cryptography course for my colleagues which focuses on <em>mistakes</em>. Its working title is <em>Cryptography Done Wrong</em> which should give you an idea of the tone. There&rsquo;s a wealth of examples of systems assembled from sound cryptographic components which end up with security issues (for some definition of secure).</p>
+<p>Over the years, <a href="https://en.wikipedia.org/wiki/Transport_Layer_Security">TLS</a> has been an excellent source of examples for such a course. I&rsquo;m not talking about <a href="heartbleed.com">heartbleed</a>, <a href="https://en.wikipedia.org/wiki/CRIME">CRIME</a> and all that; I&rsquo;m talking about mistakes made <em>using TLS</em>.</p>
+<p>It&rsquo;s very common for developers with only a passing familiarity with TLS to focus primarily on the encryption of the data stream and neglect how the identity of the remote party is established. When the identity of the other party is not established a <a href="https://en.wikipedia.org/wiki/Man-in-the-middle_attack">man-in-the-middle (MITM)</a> can intercept and modify traffic and the victims will have no idea. Think about how many potential attackers there are: the wifi access point in Starbucks, your ISP, your friendly three-letter-agencies etc. If you haven&rsquo;t already, I suggest reading <a href="http://crypto.stanford.edu/~dabo/pubs/abstracts/ssl-client-bugs.html"><em>The Most Dangerous Code in the World</em></a> to see just how many big names have gotten this very wrong.  If you&rsquo;re a poor soul working with OpenSSL, I suggest taking a look at the <a href="https://github.com/iSECPartners/ssl-conservatory">SSL conservatory project</a> for practical advice.</p>
+<p>As if to make things more error prone, some protocols (<a href="https://www.limilabs.com/blog/ssl-vs-tls-vs-starttls-stls">SMTP</a>, <a href="https://tools.ietf.org/html/rfc6120#section-5">XMPP</a>, postgresql) were retrofitted with TLS support using STARTTLS so that the same port could be used for legacy plaintext communication and TLS. Having worked in the field of <a href="https://www.acano.com/"><em>unified communications</em></a> where XMPP was a big deal, I&rsquo;ve seen my fair share of STARTTLS related security vulnerabilities. Could I find some new ones on a rainy Saturday afternoon?</p>
+<h1 id="starttls-bugs">STARTTLS bugs</h1>
+<p>To STARTTLS, the client and server negotiate in plaintext with a variation on the following:</p>
+<p><strong>Client: &ldquo;Hey server, how&rsquo;s it going?&quot;</strong></p>
+<p><strong>Server: &ldquo;Not bad, client&rdquo;</strong></p>
+<p><strong>Server: &ldquo;Hey client, I support TLS! Do you?&quot;</strong></p>
+<p><strong>Client: &ldquo;Yes&rdquo;</strong></p>
+<p><strong>Server: &ldquo;Cool! Let&rsquo;s do TLS&rdquo;</strong></p>
+<p><strong>Client: &ldquo;Ok&rdquo;</strong></p>
+<p>There is no mechanism to establish the identity of either party or the authenticity of the received messages. Therefore, a MITM can modify this conversation so it appears to the client that the server doesn&rsquo;t support TLS e.g. the client see this:</p>
+<p><strong>Client: &ldquo;Hey server, how&rsquo;s it going?&quot;</strong></p>
+<p><strong>Server: &ldquo;Not bad, client&rdquo;</strong></p>
+<p><strong>Server: &ldquo;Hey client, I don&rsquo;t support TLS&rdquo;</strong></p>
+<p><strong>Client: &ldquo;Ok&rdquo;</strong></p>
+<p>The client will proceed to communicate in plaintext revealing sensitive data, credentials etc.</p>
+<p>When using STARTTLS or other <em>opportunistic encryption</em> schemes it&rsquo;s important that the client can specify a policy which says how to behave if TLS is not negotiated. Your web browser will warn you if there&rsquo;s something wrong with the TLS negotiation with a website and may offer you a chance to proceed at your own risk: you&rsquo;d expect no less from an email or chat client.</p>
+<h1 id="the-trawl">The Trawl</h1>
+<p>I work mostly in golang these days so I decided to focus on opensource golang libraries. I picked SMTP, XMPP and postgres wire protocol as targets for investigation.</p>
+<p>I looked at some golang SMTP packages and decided quickly that they all boiled down to <a href="https://golang.org/pkg/net/smtp/">net/smtp</a>.</p>
+<p><strong>I wasn&rsquo;t optimistic that I&rsquo;d find any issues and there&rsquo;s probably a lesson there.</strong></p>
+<p>The function <a href="https://golang.org/src/net/smtp/smtp.go?s=8958:9036#L296">SendMail</a> was immediately fishy because it has no means to pass in a policy or callback to decide what to do when TLS negotiation fails. A quick read of the code (it&rsquo;s a very easy read like much of golang&rsquo;s standard library) confirmed that the default was to roll on if TLS was not negotiated.</p>
+<p>I read the code over and over for about 30 minutes with a vaguely paranoid feeling that I must be wrong. So I parked it and went on the hunt for more bugs and almost immediately found another, though not in something as well-known as golang&rsquo;s standard library. That bug will have to wait for another post. I guess it helps to have a focus for a code review and having many possible targets. Starting off with a single code base looking for <em>any</em> security bug is probably a lot harder than looking for one type of security bug in all public repos on github for a given language.</p>
+<h1 id="reporting-process">Reporting Process</h1>
+<p>Go has an easy to follow process for reporting security vulnerabilities: <a href="https://golang.org/security">https://golang.org/security</a>. Here&rsquo;s how it worked in practice:</p>
+<ul>
+<li>I reported the issue at 11:09 AM GMT on Tuesday 3rd October 2017 via email to <a href="mailto:security@golang.org">security@golang.org</a></li>
+<li>I received a response at 2:29 AM GMT the following day from Russ Cox (<a href="mailto:rsc@google.com">rsc@google.com</a>) confirming the issue and spelling out the timeline for dealing with the issue.</li>
+<li>Over the course of the next 24 hours or so I was informed of the actions which would be taken and given a link to a <a href="https://go-review.googlesource.com/c/go/+/68170">patch</a> <em>so I had a chance to comment</em></li>
+<li>1.9.1 and 1.8.4 were released on Oct 4th 2017 addressing the capture of PLAIN credentials</li>
+<li>I was asked if I wanted <a href="https://github.com/golang/go/issues/22134">credit</a> and since I&rsquo;m human I said &ldquo;yes, please&rdquo;</li>
+</ul>
+<p>I was pleasantly surprised by the quick turnaround and the fact that I was kept in the loop. The golang team decided to solve the issues in two stages:</p>
+<ol>
+<li>in the security point release: disallow PLAIN credentials on non-TLS connections</li>
+<li>acknowledge the general weakness in a public issue <a href="https://github.com/golang/go/issues/22145">https://github.com/golang/go/issues/22145</a> and aim to fix in 1.10</li>
+</ol>
+<p>As someone who has run a PSIRT (Product Security Incident Response Team) I appreciate the professionalism shown here. They are following the important parts of <a href="http://standards.iso.org/ittf/PubliclyAvailableStandards/c045170_ISO_IEC_29147_2014.zip">ISO 29417</a>.</p>
+<h1 id="lessons-learned">Lessons Learned</h1>
+<ul>
+<li>No codebase is above suspicion no matter how nice</li>
+<li>Hunting for one type of bug in a large number of projects can yield results quickly</li>
+<li>STARTLS is easy to get wrong</li>
+<li>golang has a mature security vulnerability reporting mechanism</li>
+</ul>
+
+
+
+</main>
+
+  <footer>
+  
+  
+  <hr/>
+  © Stevie Johnstone 2017-2021 | <a href="https://github.com/stevenjohnstone">Github</a>
+  
+  </footer>
+  </body>
+</html>
+

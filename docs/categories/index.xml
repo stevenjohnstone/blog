@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Categories on rm -rf /</title>
+    <link>/categories/</link>
+    <description>Recent content in Categories on rm -rf /</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Fri, 12 Feb 2021 13:21:22 +0000</lastBuildDate><atom:link href="/categories/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>fuzzing</title>
+      <link>/categories/fuzzing/</link>
+      <pubDate>Fri, 12 Feb 2021 13:21:22 +0000</pubDate>
+      
+      <guid>/categories/fuzzing/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>lua</title>
+      <link>/categories/lua/</link>
+      <pubDate>Thu, 11 Feb 2021 13:32:36 +0000</pubDate>
+      
+      <guid>/categories/lua/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>security</title>
+      <link>/categories/security/</link>
+      <pubDate>Thu, 11 Feb 2021 13:32:36 +0000</pubDate>
+      
+      <guid>/categories/security/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>supply chains</title>
+      <link>/categories/supply-chains/</link>
+      <pubDate>Thu, 11 Feb 2021 13:32:36 +0000</pubDate>
+      
+      <guid>/categories/supply-chains/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>startups</title>
+      <link>/categories/startups/</link>
+      <pubDate>Sun, 03 Jan 2021 20:13:07 +0000</pubDate>
+      
+      <guid>/categories/startups/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>golang</title>
+      <link>/categories/golang/</link>
+      <pubDate>Sat, 19 Sep 2020 22:18:02 +0000</pubDate>
+      
+      <guid>/categories/golang/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>mathematics</title>
+      <link>/categories/mathematics/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/categories/mathematics/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>probability</title>
+      <link>/categories/probability/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/categories/probability/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>puzzles</title>
+      <link>/categories/puzzles/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/categories/puzzles/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>reverse engineering</title>
+      <link>/categories/reverse-engineering/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/categories/reverse-engineering/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>bugs</title>
+      <link>/categories/bugs/</link>
+      <pubDate>Fri, 13 Oct 2017 11:39:00 +0100</pubDate>
+      
+      <guid>/categories/bugs/</guid>
+      <description></description>
+    </item>
+    
+  </channel>
+</rss>

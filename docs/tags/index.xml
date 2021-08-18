@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Tags on rm -rf /</title>
+    <link>/tags/</link>
+    <description>Recent content in Tags on rm -rf /</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Sat, 19 Sep 2020 22:18:02 +0000</lastBuildDate><atom:link href="/tags/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>CVE-2020-7711</title>
+      <link>/tags/cve-2020-7711/</link>
+      <pubDate>Sat, 19 Sep 2020 22:18:02 +0000</pubDate>
+      
+      <guid>/tags/cve-2020-7711/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>CVE-2020-7731</title>
+      <link>/tags/cve-2020-7731/</link>
+      <pubDate>Sat, 19 Sep 2020 22:18:02 +0000</pubDate>
+      
+      <guid>/tags/cve-2020-7731/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>expectation</title>
+      <link>/tags/expectation/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/tags/expectation/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>hypergeometric</title>
+      <link>/tags/hypergeometric/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/tags/hypergeometric/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>nerd snipe</title>
+      <link>/tags/nerd-snipe/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/tags/nerd-snipe/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>random variable</title>
+      <link>/tags/random-variable/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/tags/random-variable/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>symmetry</title>
+      <link>/tags/symmetry/</link>
+      <pubDate>Sat, 08 Feb 2020 18:40:13 +0000</pubDate>
+      
+      <guid>/tags/symmetry/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>bugs</title>
+      <link>/tags/bugs/</link>
+      <pubDate>Tue, 28 Jan 2020 19:16:22 +0000</pubDate>
+      
+      <guid>/tags/bugs/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>panic</title>
+      <link>/tags/panic/</link>
+      <pubDate>Tue, 28 Jan 2020 19:16:22 +0000</pubDate>
+      
+      <guid>/tags/panic/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>assembly language</title>
+      <link>/tags/assembly-language/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/tags/assembly-language/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>SAT</title>
+      <link>/tags/sat/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/tags/sat/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>unicorn engine</title>
+      <link>/tags/unicorn-engine/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/tags/unicorn-engine/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>xchg rax,rax</title>
+      <link>/tags/xchg-raxrax/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/tags/xchg-raxrax/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>Z3</title>
+      <link>/tags/z3/</link>
+      <pubDate>Sat, 12 Jan 2019 17:16:29 +0000</pubDate>
+      
+      <guid>/tags/z3/</guid>
+      <description></description>
+    </item>
+    
+    <item>
+      <title>CVE-2017-15042</title>
+      <link>/tags/cve-2017-15042/</link>
+      <pubDate>Sat, 07 Oct 2017 14:46:09 +0100</pubDate>
+      
+      <guid>/tags/cve-2017-15042/</guid>
+      <description></description>
+    </item>
+    
+  </channel>
+</rss>

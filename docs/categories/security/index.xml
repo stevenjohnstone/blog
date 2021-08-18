@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>security on rm -rf /</title>
+    <link>/categories/security/</link>
+    <description>Recent content in security on rm -rf /</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Thu, 11 Feb 2021 13:32:36 +0000</lastBuildDate><atom:link href="/categories/security/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Luarocks MITM</title>
+      <link>/posts/luarocks/</link>
+      <pubDate>Thu, 11 Feb 2021 13:32:36 +0000</pubDate>
+      
+      <guid>/posts/luarocks/</guid>
+      <description>Background LuaRocks is a package manager for Lua. The executable &amp;ldquo;luarocks&amp;rdquo; allows users to
+ download Lua packages and dependencies from luarocks.org (the default) upload packages to luarocks.org  Several months ago I found a man-in-the-middle vulnerability and reported it to the LuaRocks project via Gitter. I was directed to create a public issue on github. At the time of writing, there&amp;rsquo;s no CVE assigned by the project or github security notification.</description>
+    </item>
+    
+    <item>
+      <title>Reporting Vulnerabilities To Snyk</title>
+      <link>/posts/snyk/</link>
+      <pubDate>Sat, 19 Sep 2020 22:18:02 +0000</pubDate>
+      
+      <guid>/posts/snyk/</guid>
+      <description>Snyk is a CNA for Golang packages (and other popular languages). When I learned that they&amp;rsquo;d accept vulnerability reports, I decided to try them out with a couple of old bugs which I&amp;rsquo;d reported but got no response from the project author.
+The turnaround on these issues was very quick (a couple of hours, on a weekend no less) and there are now two CVEs assigned: CVE-2020-7711 and CVE-2020-7731.</description>
+    </item>
+    
+    <item>
+      <title>CVE-2017-15042</title>
+      <link>/posts/cve-2017-15042/</link>
+      <pubDate>Sat, 07 Oct 2017 14:46:09 +0100</pubDate>
+      
+      <guid>/posts/cve-2017-15042/</guid>
+      <description>I Went Looking For A STARTTLS Bug I&amp;rsquo;ve been putting together a cryptography course for my colleagues which focuses on mistakes. Its working title is Cryptography Done Wrong which should give you an idea of the tone. There&amp;rsquo;s a wealth of examples of systems assembled from sound cryptographic components which end up with security issues (for some definition of secure).
+Over the years, TLS has been an excellent source of examples for such a course.</description>
+    </item>
+    
+  </channel>
+</rss>
